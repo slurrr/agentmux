@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentmux"
 version = "0.1.0"
-description = ""
+description = "Profile-driven vLLM launcher"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
