@@ -1,17 +1,19 @@
-# 0001: Profile-Driven Launcher
+# 0001: Stack-First Backend Cockpit
 
 ## Status
 Accepted
 
 ## Context
-The operator needs repeatable local vLLM launch commands with machine-specific defaults and a clean
-path to extend profiles with new runtime flags.
+The repo must stay a clean serving environment rather than becoming another agent playground. It
+needs strong operator ergonomics, reproducible stack config, and future room for multiple services
+and LoRAs without turning into its own app.
 
 ## Decision
-Use a small Python CLI that reads `agentmux.toml`, merges defaults into named profiles, and renders
-or executes `uv run vllm serve ...` commands.
+Model the repo around stack manifests under `mux/`, where each stack contains one or more named
+services. Use a stack-first CLI to render, launch, stop, inspect, and smoke-test those stacks while
+letting `vllm` remain the real serving process.
 
 ## Consequences
-- Launch behavior is reviewable in Git.
-- The first version stays lightweight and stdlib-only.
-- Some vLLM flags will remain in `extra_args` until repeated usage justifies first-class config keys.
+- The repo stays backend-only and OpenAI-compatible at the boundary.
+- Runtime metadata is local and file-backed, not daemon-backed.
+- Future multi-service and LoRA work can fit the existing stack abstraction.

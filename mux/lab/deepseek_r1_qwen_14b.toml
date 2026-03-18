@@ -1,0 +1,25 @@
+[stack]
+name = "deepseek_r1_qwen_14b"
+track = "lab"
+primary_service = "reasoner"
+notes = "Heavier experimental stack for the 24 GB card."
+
+[defaults]
+host = "0.0.0.0"
+dtype = "bfloat16"
+gpu_memory_utilization = 0.92
+max_num_seqs = 4
+tensor_parallel_size = 1
+
+[defaults.env]
+CUDA_VISIBLE_DEVICES = "0"
+
+[services.reasoner]
+engine = "vllm"
+model = "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B"
+port = 8001
+served_model_name = "deepseek-r1-14b"
+max_model_len = 16384
+attention_backend = "FLASH_ATTN"
+extra_args = ["--enable-prefix-caching"]
+notes = "Lab stack for heavier reasoning workloads."

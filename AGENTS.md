@@ -1,31 +1,33 @@
 # AGENTS.md
 
 ## Project Overview
-- Purpose: manage repeatable `vllm serve` launches through named profiles
-- Primary user: local operator running models on a single RTX 4090 24 GB machine
-- Non-goals: generic distributed orchestration, Kubernetes deployment, or multi-node scheduling
+- Purpose: provide a thin but strong backend cockpit for stack-based model serving
+- Primary user: local operator running agent-serving backends on a single RTX 4090 24 GB machine
+- Non-goals: housing real agent definitions in v1, building a resident control service, or replacing `vllm`
 
-## Stack
-- Python: 3.12 via `uv`
-- Tooling: `uv`, `ruff`, `pytest`, `pyright`, `vllm`
-- Entry point: `uv run agentmux ...`
+## Stack Model
+- Primary config object: stack
+- Stack: one workload topology containing one or more named services
+- Service: one serving process, currently usually `vllm serve`
+- Boundary: OpenAI-compatible inference endpoints
 
 ## Working Agreements
-- Keep launch profiles declarative in `agentmux.toml`.
-- Prefer standard-library Python unless a dependency materially improves reliability.
-- Add or update tests whenever profile parsing or command rendering changes.
-- Record durable architecture choices in `docs/decisions/`.
-- Write concrete requirements in `docs/specs/` before large features.
+- Keep stack manifests under `mux/core`, `mux/lab`, and `mux/archive`.
+- CLI commands are stack-first, with service details only when needed.
+- Process control stays thin: launch, stop, inspect, and smoke-test, but do not build a daemon.
+- Keep global env minimal and prefer explicit manifest fields over broad vLLM env overrides.
+- Add or update tests whenever manifest shape, rendering, runtime state, or smoke behavior changes.
 
 ## Commands
 - Setup: `uv sync && uv pip install vllm --torch-backend=auto`
 - Checks: `./scripts/dev.sh`
-- List profiles: `uv run agentmux list`
-- Render command: `uv run agentmux render qwen2_5_7b`
-- Serve: `uv run agentmux serve qwen2_5_7b`
+- List stacks: `uv run agentmux list --include-archive`
+- Render stack: `uv run agentmux render qwen2_5_7b`
+- Launch stack: `uv run agentmux up qwen2_5_7b`
+- Stop stack: `uv run agentmux down`
+- Smoke test: `uv run agentmux smoke qwen2_5_7b --json`
 
 ## Conventions
-- Repo name may use dashes; Python package name uses underscores.
-- Profile names should describe model plus notable runtime shape.
-- Keep secrets out of `agentmux.toml`; prefer env vars for tokens and API keys.
-- Lock only stable machine-wide env defaults here, currently `CUDA_VISIBLE_DEVICES=0`; prefer explicit profile flags over global vLLM env overrides.
+- Proven stacks go in `mux/core`; experiments go in `mux/lab`.
+- Archive old stack references instead of deleting them when they remain useful context.
+- Keep secrets out of manifests; use `.env` for tokens and machine-specific values.

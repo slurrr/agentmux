@@ -1,0 +1,25 @@
+[stack]
+name = "qwen2_5_7b"
+track = "core"
+primary_service = "generalist"
+notes = "Known-good single-service stack for the 4090."
+
+[defaults]
+host = "0.0.0.0"
+dtype = "bfloat16"
+gpu_memory_utilization = 0.9
+max_model_len = 8192
+max_num_seqs = 8
+tensor_parallel_size = 1
+
+[defaults.env]
+CUDA_VISIBLE_DEVICES = "0"
+
+[services.generalist]
+engine = "vllm"
+model = "Qwen/Qwen2.5-7B-Instruct"
+port = 8000
+served_model_name = "qwen2.5-7b"
+attention_backend = "FLASH_ATTN"
+extra_args = ["--enable-prefix-caching"]
+notes = "Baseline general-purpose service."

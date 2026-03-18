@@ -1,28 +1,29 @@
-# Spec: Initial Runner
+# Spec: Initial Backend Cockpit
 
 ## Problem
-Running `vllm serve` by hand is error-prone once model, backend, and memory flags start to vary.
+Launching agent-serving backends by hand is error-prone once model stacks, ports, env vars, and
+future LoRA attachments start to vary.
 
 ## Scope
-Create a local CLI that reads named profiles from TOML and either renders or executes the matching
-`vllm serve` command.
+Build a stack-first CLI that discovers stack manifests from `mux/`, renders launch commands,
+launches thin runtime sessions, tracks minimal session metadata, and performs OpenAI-compatible
+smoke tests.
 
 ## Requirements
-- Profile-driven launch configuration
-- Dry-run rendering for inspection
-- Straightforward path to add LoRA-related flags later
-- No dependency on Conda
+- Stack manifests with one or more services
+- Separate `core`, `lab`, and `archive` tracks
+- Thin process control without a resident service
+- OpenAI-compatible smoke testing
+- Clear room for future LoRA-first and multi-service evolution
 
 ## Constraints
-- Single-machine RTX 4090 target
+- Single-machine RTX 4090 target for now
 - Prefer `uv` and `.venv`
-- Keep the first implementation stdlib-only
+- vLLM is the first engine but not the only possible future engine
 
 ## Acceptance Criteria
-- `uv run agentmux list` prints profile names
-- `uv run agentmux render <profile>` prints a valid command
-- `uv run agentmux serve <profile> --dry-run` prints without executing
-
-## Open Questions
-- Which LoRA flags should become first-class config fields?
-- Should profiles support inheritance beyond shared defaults?
+- `uv run agentmux list --include-archive` discovers stack manifests
+- `uv run agentmux render <stack>` prints per-service commands
+- `uv run agentmux up <stack>` records runtime metadata
+- `uv run agentmux status` reports active stack/service state
+- `uv run agentmux smoke <stack>` validates an OpenAI-compatible round-trip
