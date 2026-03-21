@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import os
+import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+
+from dotenv import load_dotenv
 
 STACK_ROOT = Path("mux")
 TRACKS = ("core", "lab", "archive")
+ENV_PATTERN = re.compile(
+    r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<bare>[A-Za-z_][A-Za-z0-9_]*))"
+)
+
+FlagValue = bool | int | float | str
 
 
 @dataclass(frozen=True)
@@ -18,6 +26,11 @@ class LoraSpec:
 
 
 @dataclass(frozen=True)
+class AssetSpec:
+    values: dict[str, str]
+
+
+@dataclass(frozen=True)
 class ServiceSpec:
     name: str
     engine: str
@@ -25,16 +38,11 @@ class ServiceSpec:
     host: str
     port: int
     served_model_name: str | None
-    dtype: str | None
-    gpu_memory_utilization: float | None
-    max_model_len: int | None
-    max_num_seqs: int | None
-    tensor_parallel_size: int | None
-    attention_backend: str | None
-    api_key_env: str | None
     env: dict[str, str]
+    args: dict[str, FlagValue]
     extra_args: list[str]
     loras: list[LoraSpec]
+    assets: AssetSpec
     notes: str | None
 
 
@@ -57,6 +65,18 @@ def _load_toml(path: Path) -> dict[str, object]:
     return data
 
 
+def _expand_env(text: str, field_name: str) -> str:
+    expanded = os.path.expandvars(text)
+    unresolved = [
+        match.group("braced") or match.group("bare") or ""
+        for match in ENV_PATTERN.finditer(expanded)
+    ]
+    if unresolved:
+        names = ", ".join(unresolved)
+        raise ValueError(f"{field_name} references unset environment variable(s): {names}")
+    return expanded
+
+
 def _as_str_dict(value: object, field_name: str) -> dict[str, str]:
     if value is None:
         return {}
@@ -66,7 +86,7 @@ def _as_str_dict(value: object, field_name: str) -> dict[str, str]:
     for key, item in value.items():
         if not isinstance(key, str) or not isinstance(item, str):
             raise ValueError(f"{field_name} keys and values must be strings")
-        result[key] = item
+        result[key] = _expand_env(item, f"{field_name}.{key}")
     return result
 
 
@@ -75,7 +95,32 @@ def _as_str_list(value: object, field_name: str) -> list[str]:
         return []
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"{field_name} must be a list of strings")
-    return list(value)
+    return [_expand_env(item, f"{field_name}[{index}]") for index, item in enumerate(value)]
+
+
+def _as_flag_map(value: object, field_name: str) -> dict[str, FlagValue]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a table")
+
+    result: dict[str, FlagValue] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise ValueError(f"{field_name} keys must be strings")
+        if isinstance(item, bool):
+            result[key] = item
+        elif isinstance(item, (int, float)):
+            result[key] = item
+        elif isinstance(item, str):
+            result[key] = _expand_env(item, f"{field_name}.{key}")
+        else:
+            raise ValueError(f"{field_name}.{key} must be a string, boolean, integer, or float")
+    return result
+
+
+def _as_assets(value: object, field_name: str) -> AssetSpec:
+    return AssetSpec(values=_as_str_dict(value, field_name))
 
 
 def _as_loras(value: object, field_name: str) -> list[LoraSpec]:
@@ -100,16 +145,62 @@ def _as_loras(value: object, field_name: str) -> list[LoraSpec]:
             raise ValueError(f"{field_name}[{index}].base_model must be a string")
         if not isinstance(enabled, bool):
             raise ValueError(f"{field_name}[{index}].enabled must be a boolean")
-        loras.append(LoraSpec(name=name, path=path, base_model=base_model, enabled=enabled))
+        loras.append(
+            LoraSpec(
+                name=name,
+                path=_expand_env(path, f"{field_name}[{index}].path"),
+                base_model=(
+                    _expand_env(base_model, f"{field_name}[{index}].base_model")
+                    if base_model is not None
+                    else None
+                ),
+                enabled=enabled,
+            )
+        )
     return loras
+
+
+def _merge_table_dict(
+    defaults: dict[str, object],
+    service: dict[str, object],
+    key: str,
+    defaults_field: str,
+    service_field: str,
+) -> dict[str, object]:
+    default_values = defaults.get(key)
+    service_values = service.get(key)
+    if default_values is None and service_values is None:
+        return {}
+    if default_values is not None and not isinstance(default_values, dict):
+        raise ValueError(f"{defaults_field} must be a table")
+    if service_values is not None and not isinstance(service_values, dict):
+        raise ValueError(f"{service_field} must be a table")
+    merged: dict[str, object] = {}
+    if isinstance(default_values, dict):
+        merged.update(default_values)
+    if isinstance(service_values, dict):
+        merged.update(service_values)
+    return merged
 
 
 def _merge_service(defaults: dict[str, object], service: dict[str, object]) -> dict[str, object]:
     merged = dict(defaults)
-    service_env = _as_str_dict(service.get("env"), "services.<name>.env")
-    defaults_env = _as_str_dict(defaults.get("env"), "defaults.env")
     merged.update(service)
-    merged["env"] = {**defaults_env, **service_env}
+    merged["env"] = _merge_table_dict(defaults, service, "env", "defaults.env", "services.<name>.env")
+    merged["args"] = _merge_table_dict(
+        defaults,
+        service,
+        "args",
+        "defaults.args",
+        "services.<name>.args",
+    )
+    merged["assets"] = _merge_table_dict(
+        defaults,
+        service,
+        "assets",
+        "defaults.assets",
+        "services.<name>.assets",
+    )
     return merged
 
 
@@ -125,78 +216,43 @@ def _service_from_data(
     host = merged.get("host", "0.0.0.0")
     port = merged.get("port")
     served_model_name = merged.get("served_model_name")
-    dtype = merged.get("dtype")
-    gpu_memory_utilization = merged.get("gpu_memory_utilization")
-    max_model_len = merged.get("max_model_len")
-    max_num_seqs = merged.get("max_num_seqs")
-    tensor_parallel_size = merged.get("tensor_parallel_size")
-    attention_backend = merged.get("attention_backend")
-    api_key_env = merged.get("api_key_env")
     notes = merged.get("notes")
 
     if not isinstance(engine, str) or not engine:
         raise ValueError(f"services.{name}.engine must be a non-empty string")
     if not isinstance(model, str) or not model:
         raise ValueError(f"services.{name}.model must be a non-empty string")
-    if not isinstance(host, str):
-        raise ValueError(f"services.{name}.host must be a string")
+    if not isinstance(host, str) or not host:
+        raise ValueError(f"services.{name}.host must be a non-empty string")
     if not isinstance(port, int):
         raise ValueError(f"services.{name}.port must be an integer")
-
-    for field_name, value in {
-        "served_model_name": served_model_name,
-        "dtype": dtype,
-        "attention_backend": attention_backend,
-        "api_key_env": api_key_env,
-        "notes": notes,
-    }.items():
-        if value is not None and not isinstance(value, str):
-            raise ValueError(f"services.{name}.{field_name} must be a string")
-
-    for field_name, value in {
-        "max_model_len": max_model_len,
-        "max_num_seqs": max_num_seqs,
-        "tensor_parallel_size": tensor_parallel_size,
-    }.items():
-        if value is not None and not isinstance(value, int):
-            raise ValueError(f"services.{name}.{field_name} must be an integer")
-
-    if gpu_memory_utilization is not None and not isinstance(gpu_memory_utilization, (int, float)):
-        raise ValueError(f"services.{name}.gpu_memory_utilization must be numeric")
-
-    served_model_name = cast(str | None, served_model_name)
-    dtype = cast(str | None, dtype)
-    max_model_len = cast(int | None, max_model_len)
-    max_num_seqs = cast(int | None, max_num_seqs)
-    tensor_parallel_size = cast(int | None, tensor_parallel_size)
-    attention_backend = cast(str | None, attention_backend)
-    api_key_env = cast(str | None, api_key_env)
-    notes = cast(str | None, notes)
+    if served_model_name is not None and not isinstance(served_model_name, str):
+        raise ValueError(f"services.{name}.served_model_name must be a string")
+    if notes is not None and not isinstance(notes, str):
+        raise ValueError(f"services.{name}.notes must be a string")
 
     return ServiceSpec(
         name=name,
         engine=engine,
-        model=model,
+        model=_expand_env(model, f"services.{name}.model"),
         host=host,
         port=port,
-        served_model_name=served_model_name,
-        dtype=dtype,
-        gpu_memory_utilization=(
-            float(gpu_memory_utilization) if gpu_memory_utilization is not None else None
+        served_model_name=(
+            _expand_env(served_model_name, f"services.{name}.served_model_name")
+            if served_model_name is not None
+            else None
         ),
-        max_model_len=max_model_len,
-        max_num_seqs=max_num_seqs,
-        tensor_parallel_size=tensor_parallel_size,
-        attention_backend=attention_backend,
-        api_key_env=api_key_env,
         env=_as_str_dict(merged.get("env"), f"services.{name}.env"),
+        args=_as_flag_map(merged.get("args"), f"services.{name}.args"),
         extra_args=_as_str_list(merged.get("extra_args"), f"services.{name}.extra_args"),
         loras=_as_loras(merged.get("loras"), f"services.{name}.loras"),
+        assets=_as_assets(merged.get("assets"), f"services.{name}.assets"),
         notes=notes,
     )
 
 
 def load_stack(path: Path) -> StackSpec:
+    load_dotenv(dotenv_path=Path(".env"))
     if not path.exists():
         raise FileNotFoundError(f"Stack file not found: {path}")
 

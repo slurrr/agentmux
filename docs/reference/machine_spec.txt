@@ -1,0 +1,52 @@
+=== FASTFETCH ===
+
+[1G[19A[47Cpoop@DESKTOP-MDLU7UA
+[47C--------------------
+[47COS: Ubuntu 22.04.2 LTS (Jammy Jellyfish) x86_64
+[47CHost: Windows Subsystem for Linux - Ubuntu (2.6.3.0)
+[47CKernel: Linux 6.6.87.2-microsoft-standard-WSL2
+[47CUptime: 11 days, 16 hours, 12 mins
+[47CPackages: 1181 (dpkg), 6 (snap), 59 (brew)
+[47CShell: bash 5.1.16
+[47CDisplay (rdp-0): 3840x2160, 60 Hz
+[47CWM: WSLg 1.0.71 (Wayland)
+[47CTheme: Yaru [GTK3]
+[47CIcons: Yaru [GTK3]
+[47CTerminal: Windows Terminal
+[47CCPU: 13th Gen Intel(R) Core(TM) i9-13900K (32) @ 3.00 GHz
+[47CGPU 1: NVIDIA GeForce RTX 4090 (23.57 GiB) [Discrete]
+[47CGPU 2: Intel(R) UHD Graphics 770 (128.00 MiB) [Integrated]
+[47CMemory: 16.34 GiB / 31.19 GiB (52%)
+[47CSwap: 3.52 GiB / 8.00 GiB (44%)
+[47CDisk (/): 396.50 GiB / 1006.85 GiB (39%) - ext4
+[47CDisk (/mnt/c): 818.23 GiB / 930.59 GiB (88%) - 9p
+[47CDisk (/mnt/d): 629.79 GiB / 1.82 TiB (34%) - 9p
+[47CDisk (/mnt/wsl/docker-desktop/docker-desktop-user-distro): 70.79 MiB / 136.02 MiB (52%) - ext4
+[47CLocal IP (eth0): 172.26.0.43/20
+[47CLocale: C.UTF-8
+[47C
+[47C[40m   [41m   [42m   [43m   [44m   [45m   [46m   [47m   [m
+[47C[100m   [101m   [102m   [103m   [104m   [105m   [106m   [107m   [m
+
+=== LSHW ===
+H/W path    Device    Class      Description
+============================================
+                      system     Computer
+/0                    bus        Motherboard
+/0/0                  memory     31GiB System memory
+/0/1                  processor  13th Gen Intel(R) Core(TM) i9-13900K
+/0/2                  generic    Virtio file system
+/0/2/0                generic    Virtual I/O device
+/0/3                  display    Microsoft Corporation
+/0/4                  storage    Virtio console
+/0/4/0                generic    Virtual I/O device
+/0/5                  display    Microsoft Corporation
+/0/6                  system     PnP device PNP0b00
+/0/7        scsi0     storage    
+/0/7/0.0.0  /dev/sda  volume     388MiB Virtual Disk
+/0/7/0.0.1  /dev/sdb  volume     186MiB Virtual Disk
+/0/7/0.0.2  /dev/sdc  volume     8GiB Virtual Disk
+/0/7/0.0.3  /dev/sdd  volume     1TiB Virtual Disk
+/0/7/0.0.4  /dev/sde  volume     151MiB Virtual Disk
+/0/7/0.0.5  /dev/sdf  volume     1TiB Virtual Disk
+/1          eth0      network    Ethernet interface

@@ -1,0 +1,199 @@
+[stack]
+name = "example_vllm_recipes"
+track = "archive"
+primary_service = "generalist"
+notes = "Reference-only example showing a robust vLLM recipe surface with multiple services, defaults, LoRAs, assets, and generic args."
+
+[defaults]
+host = "0.0.0.0"
+
+[defaults.env]
+CUDA_VISIBLE_DEVICES = "0"
+# HF_TOKEN = "${HF_TOKEN}"
+# VLLM_API_KEY = "${VLLM_API_KEY}"
+# HF_HOME = "${CACHE_ROOT}/hf"
+
+[defaults.args]
+dtype = "bfloat16"
+gpu_memory_utilization = 0.9
+max_num_seqs = 8
+tensor_parallel_size = 1
+max_model_len = 8192
+enable_prefix_caching = true
+
+[defaults.assets]
+tokenizer = "${MODEL_ROOT}/SharedTokenizer"
+
+# Model, tokenizer, and loading:
+# tokenizer = "${MODEL_ROOT}/SomeTokenizer"
+# tokenizer_mode = "auto"
+# revision = "main"
+# code_revision = "main"
+# disable_log_requests = true
+# trust_remote_code = true
+# enforce_eager = false
+# disable_sliding_window = false
+# enable_sleep_mode = false
+# seed = 7
+# quantization = "awq"
+# load_format = "auto"
+# download_dir = "${CACHE_ROOT}/downloads"
+# ignore_patterns = "['original/**/*']"
+
+# Memory, cache, and throughput:
+# max_num_batched_tokens = 16384
+# block_size = 16
+# kv_cache_memory_bytes = "8G"
+# prefix_caching_hash_algo = "sha256"
+# enable_chunked_prefill = true
+# max_num_partial_prefills = 1
+# max_long_partial_prefills = 1
+# swap_space = 0
+# cpu_offload_gb = 0
+# kv_cache_dtype = "auto"
+# scheduling_policy = "fcfs"
+# async_scheduling = false
+# stream_interval = 1
+
+# Structured outputs, tools, and decoding:
+# reasoning_parser = "deepseek_r1"
+# generation_config = "auto"
+# override_generation_config = "{\"temperature\":0.2}"
+# tool_call_parser = "hermes"
+# enable_auto_tool_choice = true
+# exclude_tools_when_tool_choice_none = true
+# structured_outputs_config = "{\"backend\":\"auto\"}"
+# chat_template = "assets/chat_templates/runtime_template.jinja"
+# chat_template_content_format = "openai"
+# trust_request_chat_template = false
+
+# Parallelism / distribution examples:
+# pipeline_parallel_size = 1
+# data_parallel_size = 1
+# data_parallel_size_local = 1
+# data_parallel_start_rank = 0
+# data_parallel_backend = "mp"
+# decode_context_parallel_size = 1
+# prefill_context_parallel_size = 1
+# distributed_executor_backend = "mp"
+# max_parallel_loading_workers = 2
+# disable_custom_all_reduce = false
+# distributed_executor_backend = "mp"
+
+# API server, networking, and access:
+# api_key = "${VLLM_API_KEY}"
+# response_role = "assistant"
+# enable_request_id_headers = true
+# enable_prompt_tokens_details = true
+# enable_tokenizer_info_endpoint = true
+# disable_fastapi_docs = false
+# disable_uvicorn_access_log = false
+# uvicorn_log_level = "info"
+# allowed_origins = "['*']"
+# allowed_methods = "['*']"
+# allowed_headers = "['*']"
+# allow_credentials = false
+# root_path = ""
+# ssl_keyfile = "/path/to/key.pem"
+# ssl_certfile = "/path/to/cert.pem"
+
+# Logging, metrics, and debugging:
+# max_log_len = 256
+# disable_log_stats = false
+# enable_log_outputs = false
+# log_error_stack = true
+# kv_cache_metrics = false
+# cudagraph_metrics = false
+# collect_detailed_traces = "model"
+
+# Multimodal and media:
+# allowed_local_media_path = "/home/poop/ml/media"
+# allowed_media_domains = "['example.com']"
+# limit_mm_per_prompt = "{\"image\":4}"
+# media_io_kwargs = "{\"image\":{\"rgb\":true}}"
+# mm_processor_kwargs = "{\"do_resize\":true}"
+# mm_processor_cache_gb = 4
+
+# LoRA capacity:
+# max_loras = 2
+# max_lora_rank = 64
+# max_cpu_loras = 4
+# lora_dtype = "auto"
+# fully_sharded_loras = false
+
+[services.generalist]
+engine = "vllm"
+model = "${MODEL_ROOT}/Qwen2.5-7B-Instruct"
+port = 8000
+served_model_name = "qwen2.5-7b"
+notes = "General-purpose instruction model with a custom chat template and an optional LoRA."
+
+[services.generalist.args]
+attention_backend = "FLASH_ATTN"
+# tokenizer = "${MODEL_ROOT}/Qwen2.5-7B-Instruct"
+# tokenizer_mode = "auto"
+# generation_config = "auto"
+# max_logprobs = 20
+# logprobs_mode = "raw_logprobs"
+# enable_force_include_usage = true
+
+[services.generalist.assets]
+chat_template = "assets/chat_templates/qwen25_default.jinja"
+system_prompt = "assets/prompts/generalist_system.md"
+
+[[services.generalist.loras]]
+name = "planner"
+path = "${LORA_ROOT}/planner-lora"
+base_model = "${MODEL_ROOT}/Qwen2.5-7B-Instruct"
+enabled = false
+
+[services.reasoner]
+engine = "vllm"
+model = "${MODEL_ROOT}/DeepSeek-R1-Distill-Qwen-14B"
+port = 8001
+served_model_name = "deepseek-r1-14b"
+notes = "Heavier reasoning-oriented variant with a few service-level overrides."
+extra_args = ["--disable-log-requests"]
+
+[services.reasoner.env]
+CUDA_VISIBLE_DEVICES = "1"
+
+[services.reasoner.args]
+gpu_memory_utilization = 0.92
+max_num_seqs = 4
+max_model_len = 16384
+swap_space = 0
+attention_backend = "FLASH_ATTN"
+# reasoning_parser = "deepseek_r1"
+# tool_call_parser = "hermes"
+# enable_auto_tool_choice = true
+# structured_outputs_config = "{\"backend\":\"auto\",\"reasoning_parser\":\"deepseek_r1\"}"
+
+[services.reasoner.assets]
+chat_template = "assets/chat_templates/deepseek_reasoning.jinja"
+
+[services.coder]
+engine = "vllm"
+model = "${MODEL_ROOT}/Qwen2.5-Coder-7B-Instruct"
+port = 8003
+served_model_name = "qwen2.5-coder-7b"
+notes = "Example coding-oriented service with repeatable extra args."
+extra_args = [
+  "--disable-log-requests",
+  "--allowed-local-media-path",
+  "/home/poop/ml/workspace",
+]
+
+[services.coder.args]
+max_model_len = 32768
+max_num_seqs = 12
+attention_backend = "FLASH_ATTN"
+# tool_call_parser = "qwen3_coder"
+# enable_auto_tool_choice = true
+# generation_config = "auto"
+# override_generation_config = "{\"temperature\":0.1}"
+# rope_scaling = "{\"rope_type\":\"dynamic\",\"factor\":2.0}"
+
+[services.coder.assets]
+chat_template = "assets/chat_templates/coder.jinja"
+system_prompt = "assets/prompts/coder_system.md"

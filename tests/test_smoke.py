@@ -47,7 +47,7 @@ def test_smoke_stack_safe_round_trips(monkeypatch) -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        stack = resolve_stack("qwen2_5_7b")
+        stack = resolve_stack("example_vllm_recipes")
         service = stack.services[stack.primary_service]
         patched = stack.services.copy()
         patched[stack.primary_service] = service.__class__(

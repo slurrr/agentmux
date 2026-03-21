@@ -3,13 +3,24 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from agentmux import __version__
 from agentmux.config import STACK_ROOT, list_stacks, resolve_stack
 from agentmux.runner import build_stack_plan, launch_stack
-from agentmux.runtime import clear_active, load_history, read_active, runtime_status, stop_runtime
+from agentmux.runtime import (
+    clear_active,
+    load_history,
+    pid_is_running,
+    read_active,
+    runtime_status,
+    stop_runtime,
+)
 from agentmux.smoke import smoke_stack_safe
+
+STARTUP_READY_MARKER = "Application startup complete."
+STARTUP_EXIT_SETTLE_SECONDS = 1.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -72,7 +83,10 @@ def _stack_payload(stack_name: str, root: Path, include_archive: bool = True) ->
                 "host": service.host,
                 "port": service.port,
                 "served_model_name": service.served_model_name,
-                "attention_backend": service.attention_backend,
+                "env": service.env,
+                "args": service.args,
+                "extra_args": service.extra_args,
+                "assets": service.assets.values,
                 "loras": [
                     {
                         "name": lora.name,
@@ -150,6 +164,41 @@ def _print_status(as_json: bool) -> int:
     return 0
 
 
+def _display_host(host: str) -> str:
+    return "127.0.0.1" if host == "0.0.0.0" else host
+
+
+def _service_base_url(host: str, port: int) -> str:
+    return f"http://{_display_host(host)}:{port}/v1"
+
+
+def _follow_startup_log(log_path: Path, pid: int) -> bool:
+    offset = 0
+    exit_seen_at: float | None = None
+    while True:
+        if log_path.exists():
+            with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+                handle.seek(offset)
+                chunk = handle.read()
+                offset = handle.tell()
+            if chunk:
+                print(chunk, end="", flush=True)
+                if STARTUP_READY_MARKER in chunk:
+                    return True
+        if not pid_is_running(pid) and log_path.exists():
+            if exit_seen_at is None:
+                exit_seen_at = time.time()
+            elif time.time() - exit_seen_at >= STARTUP_EXIT_SETTLE_SECONDS:
+                if log_path.exists():
+                    with log_path.open("r", encoding="utf-8", errors="replace") as handle:
+                        handle.seek(offset)
+                        chunk = handle.read()
+                    if chunk:
+                        print(chunk, end="", flush=True)
+                return False
+        time.sleep(0.1)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -168,11 +217,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "up":
         if args.dry_run:
             return _print_render(args.stack, args.root, False)
+        stack = resolve_stack(args.stack, root=args.root)
         runtime_stack = launch_stack(args.stack, root=args.root)
         print(f"started stack: {runtime_stack.stack}")
         for service in runtime_stack.services:
-            print(f"  {service.name}: pid={service.pid} port={service.port} log={service.log_path}")
-        return 0
+            service_spec = stack.services[service.name]
+            print(
+                f"  {service.name}: pid={service.pid} port={service.port} "
+                f"url={_service_base_url(service_spec.host, service.port)} log={service.log_path}"
+            )
+        primary_runtime = next(
+            service for service in runtime_stack.services if service.name == stack.primary_service
+        )
+        ready = _follow_startup_log(Path(primary_runtime.log_path), primary_runtime.pid)
+        return 0 if ready else 1
 
     if args.command == "down":
         active = read_active()

@@ -2,29 +2,54 @@
 name = "example_two_service"
 track = "archive"
 primary_service = "router_default"
-notes = "Reference-only example showing future multi-service stack shape."
+notes = "Reference-only example showing the current manifest surface and future multi-service shape."
 
 [defaults]
 host = "0.0.0.0"
+
+[defaults.args]
 dtype = "bfloat16"
 gpu_memory_utilization = 0.85
 max_model_len = 4096
 max_num_seqs = 8
 tensor_parallel_size = 1
 
-[defaults.env]
-CUDA_VISIBLE_DEVICES = "0"
-
 [services.router_default]
 engine = "vllm"
-model = "Qwen/Qwen2.5-3B-Instruct"
+model = "Qwen2.5-3B-Instruct"
+host = "127.0.0.1"
 port = 8010
 served_model_name = "qwen2.5-3b"
-notes = "Generalist service example."
+notes = "Generalist service example with repo sugar plus generic vLLM args."
+extra_args = ["--disable-log-requests"]
+
+[services.router_default.env]
+CUDA_VISIBLE_DEVICES = "0"
+HF_HOME = "hf-cache"
+
+[services.router_default.args]
+dtype = "bfloat16"
+gpu_memory_utilization = 0.8
+max_model_len = 4096
+max_num_seqs = 12
+tensor_parallel_size = 1
+attention_backend = "FLASH_ATTN"
+enable_prefix_caching = true
+guided_decoding_backend = "outlines"
+swap_space = 0
+
+[[services.router_default.loras]]
+name = "coder"
+path = "coder-lora"
+base_model = "Qwen2.5-3B-Instruct"
+enabled = false
 
 [services.coder]
 engine = "vllm"
-model = "Qwen/Qwen2.5-Coder-7B-Instruct"
+model = "Qwen2.5-Coder-7B-Instruct"
 port = 8011
 served_model_name = "qwen2.5-coder-7b"
 notes = "Secondary coding-focused service example."
+
+[services.coder.assets]
+chat_template = "assets/chat_templates/coder.jinja"

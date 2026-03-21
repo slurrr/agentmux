@@ -1,22 +1,74 @@
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import pytest
+
 from agentmux.runner import build_stack_plan, launch_stack
 from agentmux.runtime import RuntimeService, RuntimeStack, read_active, runtime_status, write_active
 
 
 def test_build_stack_plan_renders_vllm_command() -> None:
-    plan = build_stack_plan("qwen2_5_7b")
+    plan = build_stack_plan("example_vllm_recipes")
     service = plan.services[0]
     assert service.command[:4] == ["uv", "run", "vllm", "serve"]
-    assert "Qwen/Qwen2.5-7B-Instruct" in service.command
-    assert service.env["CUDA_VISIBLE_DEVICES"] == "0"
+    assert "${MODEL_ROOT}" not in " ".join(service.command)
+    assert service.command[4].endswith("/Qwen2.5-7B-Instruct")
+    assert "--chat-template" in service.command
+    assert "assets/chat_templates/qwen25_default.jinja" in service.command
+    assert "--enable-prefix-caching" in service.command
+    assert "--attention-backend" in service.command
+    assert "FLASH_ATTN" in service.command
+    assert plan.stack.env["CUDA_VISIBLE_DEVICES"] == "0"
 
 
 def test_build_stack_plan_handles_multi_service_stack() -> None:
     plan = build_stack_plan("example_two_service")
     assert len(plan.services) == 2
     assert {service.service for service in plan.services} == {"router_default", "coder"}
+    router_default = next(
+        service for service in plan.services if service.service == "router_default"
+    )
+    assert "--swap-space" in router_default.command
+    assert "0" in router_default.command
+    assert "--disable-log-requests" in router_default.command
+
+
+def test_build_stack_plan_assets_override_same_name_args(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    mux_root = tmp_path / "mux" / "lab"
+    mux_root.mkdir(parents=True)
+    (tmp_path / ".env").write_text("MODEL_ROOT=/models\n", encoding="utf-8")
+    (mux_root / "collision.toml").write_text(
+        """
+[stack]
+name = "collision"
+track = "lab"
+primary_service = "main"
+
+[defaults.assets]
+chat_template = "assets/chat_templates/from_defaults.jinja"
+
+[services.main]
+engine = "vllm"
+model = "${MODEL_ROOT}/Qwen/Test"
+port = 8000
+
+[services.main.args]
+chat_template = "assets/chat_templates/from_args.jinja"
+
+[services.main.assets]
+chat_template = "assets/chat_templates/from_assets.jinja"
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = build_stack_plan("collision", root=tmp_path / "mux")
+    command = plan.services[0].command
+    assert command.count("--chat-template") == 1
+    assert "assets/chat_templates/from_assets.jinja" in command
+    assert "assets/chat_templates/from_args.jinja" not in command
+    assert "assets/chat_templates/from_defaults.jinja" not in command
 
 
 @patch("agentmux.runner.subprocess.Popen")
@@ -28,14 +80,14 @@ def test_launch_stack_writes_runtime_state(mock_popen, tmp_path: Path, monkeypat
     process.pid = 4242
     mock_popen.return_value = process
 
-    runtime_stack = launch_stack("qwen2_5_7b", root=tmp_path / "mux")
+    runtime_stack = launch_stack("example_vllm_recipes", root=tmp_path / "mux")
     active = read_active()
 
-    assert runtime_stack.stack == "qwen2_5_7b"
+    assert runtime_stack.stack == "example_vllm_recipes"
     assert active is not None
-    assert active.stack == "qwen2_5_7b"
+    assert active.stack == "example_vllm_recipes"
     status = runtime_status(active)
-    assert status["stack"] == "qwen2_5_7b"
+    assert status["stack"] == "example_vllm_recipes"
     assert status["services"][0]["pid"] == 4242
 
 
@@ -72,7 +124,7 @@ def test_launch_stack_ignores_stale_active_state(
     process.pid = 5252
     mock_popen.return_value = process
 
-    runtime_stack = launch_stack("qwen2_5_7b", root=tmp_path / "mux")
+    runtime_stack = launch_stack("example_vllm_recipes", root=tmp_path / "mux")
 
     assert mock_pid_is_running.called
-    assert runtime_stack.stack == "qwen2_5_7b"
+    assert runtime_stack.stack == "example_vllm_recipes"

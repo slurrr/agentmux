@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from agentmux.config import STACK_ROOT, LoraSpec, ServiceSpec, StackSpec, resolve_stack
+from agentmux.config import FlagValue, LoraSpec, STACK_ROOT, ServiceSpec, StackSpec, resolve_stack
 from agentmux.runtime import (
     RuntimeService,
     RuntimeStack,
@@ -38,6 +38,12 @@ class StackLaunchPlan:
     services: list[ServiceLaunchPlan]
 
 
+ASSET_FLAG_MAP = {
+    "chat_template": "--chat-template",
+    "tokenizer": "--tokenizer",
+}
+
+
 def _apply_loras(command: list[str], loras: list[LoraSpec]) -> None:
     enabled = [lora for lora in loras if lora.enabled]
     if not enabled:
@@ -45,6 +51,33 @@ def _apply_loras(command: list[str], loras: list[LoraSpec]) -> None:
     command.append("--enable-lora")
     for lora in enabled:
         command.extend(["--lora-modules", f"{lora.name}={lora.path}"])
+
+
+def _apply_flag_map(
+    command: list[str],
+    args: dict[str, FlagValue],
+    excluded_keys: set[str] | None = None,
+) -> None:
+    excluded = excluded_keys or set()
+    for key, value in args.items():
+        if key in excluded:
+            continue
+        flag = f"--{key.replace('_', '-')}"
+        if isinstance(value, bool):
+            if value:
+                command.append(flag)
+            continue
+        command.extend([flag, str(value)])
+
+
+def _apply_assets(command: list[str], service: ServiceSpec) -> set[str]:
+    applied_keys: set[str] = set()
+    for key, flag in ASSET_FLAG_MAP.items():
+        value = service.assets.values.get(key)
+        if value:
+            command.extend([flag, value])
+            applied_keys.add(key)
+    return applied_keys
 
 
 def _build_vllm_command(service: ServiceSpec) -> list[str]:
@@ -61,18 +94,8 @@ def _build_vllm_command(service: ServiceSpec) -> list[str]:
     ]
     if service.served_model_name:
         command.extend(["--served-model-name", service.served_model_name])
-    if service.dtype:
-        command.extend(["--dtype", service.dtype])
-    if service.gpu_memory_utilization is not None:
-        command.extend(["--gpu-memory-utilization", str(service.gpu_memory_utilization)])
-    if service.max_model_len is not None:
-        command.extend(["--max-model-len", str(service.max_model_len)])
-    if service.max_num_seqs is not None:
-        command.extend(["--max-num-seqs", str(service.max_num_seqs)])
-    if service.tensor_parallel_size is not None:
-        command.extend(["--tensor-parallel-size", str(service.tensor_parallel_size)])
-    if service.attention_backend:
-        command.extend(["--attention-backend", service.attention_backend])
+    asset_keys = _apply_assets(command, service)
+    _apply_flag_map(command, service.args, excluded_keys=asset_keys)
     _apply_loras(command, service.loras)
     command.extend(service.extra_args)
     return command
@@ -91,10 +114,6 @@ def build_stack_plan(
         env = os.environ.copy()
         env.update(stack.env)
         env.update(service.env)
-        if service.api_key_env:
-            api_key = os.environ.get(service.api_key_env)
-            if api_key:
-                env.setdefault("VLLM_API_KEY", api_key)
 
         if service.engine != "vllm":
             raise ValueError(f"Unsupported engine in v1: {service.engine}")
