@@ -53,7 +53,7 @@ default_chat_template_kwargs = "{\"enable_thinking\": false}"
 # - parallel_tool_calls
 
 [services.main.assets]
-chat_template = "assets/chat_templates/qwen3_codex_compat.jinja"
+# chat_template = "assets/chat_templates/qwen3_codex_compat.jinja"
 
 # [[services.main.loras]]
 # name = "coder"

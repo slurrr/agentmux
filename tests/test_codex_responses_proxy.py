@@ -21,7 +21,7 @@ def test_normalize_responses_payload_upgrades_assistant_message_items() -> None:
     assert assistant['content'][0]['logprobs'] == []
 
 
-def test_normalize_responses_payload_leaves_other_items_alone() -> None:
+def test_normalize_responses_payload_converts_developer_role_to_system() -> None:
     payload = {
         'input': [
             {'type': 'message', 'role': 'developer', 'content': [{'type': 'input_text', 'text': 'rules'}]},
@@ -29,4 +29,19 @@ def test_normalize_responses_payload_leaves_other_items_alone() -> None:
         ]
     }
     normalized = normalize_responses_payload(payload)
-    assert normalized == payload
+    assert normalized['input'][0]['role'] == 'system'
+    assert normalized['input'][1] == payload['input'][1]
+
+
+def test_normalize_responses_payload_moves_system_to_front() -> None:
+    payload = {
+        'input': [
+            {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'u1'}]},
+            {'type': 'message', 'role': 'developer', 'content': [{'type': 'input_text', 'text': 'rules'}]},
+            {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'u2'}]},
+        ]
+    }
+    normalized = normalize_responses_payload(payload)
+    assert normalized['input'][0]['role'] == 'system'
+    assert normalized['input'][1]['role'] == 'user'
+    assert normalized['input'][2]['role'] == 'user'
