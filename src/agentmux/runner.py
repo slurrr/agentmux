@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from agentmux.config import FlagValue, LoraSpec, STACK_ROOT, ServiceSpec, StackSpec, resolve_stack
+from agentmux.config import STACK_ROOT, FlagValue, LoraSpec, ServiceSpec, StackSpec, resolve_stack
 from agentmux.runtime import (
     RuntimeService,
     RuntimeStack,

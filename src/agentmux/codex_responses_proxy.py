@@ -1,16 +1,29 @@
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import os
 import re
+from http.client import IncompleteRead
 from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from fastapi import FastAPI, Request as FastAPIRequest, Response
+import httpx
+import requests
+from fastapi import FastAPI, Response
+from fastapi import Request as FastAPIRequest
+from fastapi.responses import StreamingResponse
 
-UPSTREAM_BASE_URL = os.environ.get('AGENTMUX_RESPONSES_UPSTREAM', 'http://127.0.0.1:8002/v1').rstrip('/')
+
+def _to_bytes(body: bytes | memoryview[int]) -> bytes:
+    return bytes(body) if isinstance(body, memoryview) else body
+
+
+UPSTREAM_BASE_URL = os.environ.get(
+    "AGENTMUX_RESPONSES_UPSTREAM", "http://127.0.0.1:8002/v1"
+).rstrip("/")
 LOG_INPUT_PREVIEW = os.environ.get("AGENTMUX_PROXY_LOG_INPUT_PREVIEW", "").lower() in {
     "1",
     "true",
@@ -21,10 +34,25 @@ LOG_INPUT_PREVIEW_CHARS = int(os.environ.get("AGENTMUX_PROXY_LOG_INPUT_PREVIEW_C
 FORCE_REQUIRED_TOOL_CHOICE = os.environ.get(
     "AGENTMUX_PROXY_FORCE_REQUIRED_TOOL_CHOICE", ""
 ).lower() in {"1", "true", "yes", "on"}
+DISABLE_PARALLEL_TOOL_CALLS = os.environ.get(
+    "AGENTMUX_PROXY_DISABLE_PARALLEL_TOOL_CALLS", "1"
+).lower() in {"1", "true", "yes", "on"}
 CLEAR_PREVIOUS_RESPONSE_ID = os.environ.get(
     "AGENTMUX_PROXY_CLEAR_PREVIOUS_RESPONSE_ID", ""
 ).lower() in {"1", "true", "yes", "on"}
-app = FastAPI(title='agentmux-codex-responses-proxy')
+ENABLE_COMPAT_RETRY = os.environ.get(
+    "AGENTMUX_PROXY_ENABLE_COMPAT_RETRY", "1"
+).lower() in {"1", "true", "yes", "on"}
+ENABLE_TOOL_CHOICE_RETRY = os.environ.get(
+    "AGENTMUX_PROXY_ENABLE_TOOL_CHOICE_RETRY", "1"
+).lower() in {"1", "true", "yes", "on"}
+SANITIZE_XML_TOOL_TEXT = os.environ.get(
+    "AGENTMUX_PROXY_SANITIZE_XML_TOOL_TEXT", "1"
+).lower() in {"1", "true", "yes", "on"}
+SANITIZE_MODE = os.environ.get(
+    "AGENTMUX_PROXY_SANITIZE_MODE", "completed_only"
+).strip().lower()
+app = FastAPI(title="agentmux-codex-responses-proxy")
 
 
 def _summarize_tool(tool: Any) -> dict[str, Any]:
@@ -92,9 +120,7 @@ def _log_payload_shape(payload: dict[str, Any], normalized: dict[str, Any] | Non
                 ),
                 "previous_response_id": payload.get("previous_response_id"),
                 "normalized_previous_response_id": (
-                    normalized.get("previous_response_id")
-                    if isinstance(normalized, dict)
-                    else None
+                    normalized.get("previous_response_id") if isinstance(normalized, dict) else None
                 ),
                 "tool_count": len(tools) if isinstance(tools, list) else 0,
                 "tools": tool_summaries,
@@ -108,27 +134,38 @@ def _log_payload_shape(payload: dict[str, Any], normalized: dict[str, Any] | Non
 
 
 def _stable_item_id(item: dict[str, Any], index: int) -> str:
-    digest = hashlib.sha1(json.dumps(item, sort_keys=True).encode('utf-8')).hexdigest()[:12]
-    return f'msg_proxy_{index}_{digest}'
+    digest = hashlib.sha1(json.dumps(item, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+    return f"msg_proxy_{index}_{digest}"
 
 
 def _normalize_assistant_message_item(item: dict[str, Any], index: int) -> dict[str, Any]:
-    if item.get('type') != 'message' or item.get('role') != 'assistant':
+    if item.get("type") != "message" or item.get("role") != "assistant":
         return item
     normalized = dict(item)
-    normalized.setdefault('id', _stable_item_id(item, index))
-    normalized.setdefault('status', 'completed')
+    normalized.setdefault("id", _stable_item_id(item, index))
+    normalized.setdefault("status", "completed")
     content = []
-    for part in normalized.get('content', []):
-        if isinstance(part, dict) and part.get('type') == 'output_text':
+    for part in normalized.get("content", []):
+        if isinstance(part, dict) and part.get("type") == "output_text":
             updated = dict(part)
-            updated.setdefault('annotations', [])
-            updated.setdefault('logprobs', [])
+            updated.setdefault("annotations", [])
+            updated.setdefault("logprobs", [])
             content.append(updated)
         else:
             content.append(part)
-    normalized['content'] = content
+    normalized["content"] = content
     return normalized
+
+
+def _coerce_message_item(item: dict[str, Any]) -> dict[str, Any]:
+    # OpenCode may send message objects without explicit type.
+    if item.get("type") == "message":
+        return item
+    if isinstance(item.get("role"), str):
+        normalized = dict(item)
+        normalized["type"] = "message"
+        return normalized
+    return item
 
 
 def _normalize_message_role(item: dict[str, Any]) -> dict[str, Any]:
@@ -142,39 +179,48 @@ def _normalize_message_role(item: dict[str, Any]) -> dict[str, Any]:
 
 def normalize_responses_payload(payload: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(payload)
-    input_items = normalized.get('input')
+    input_items = normalized.get("input")
     if isinstance(input_items, list):
         converted: list[Any] = []
         for index, item in enumerate(input_items):
             if not isinstance(item, dict):
                 converted.append(item)
                 continue
-            normalized_item = _normalize_message_role(item)
+            normalized_item = _coerce_message_item(item)
+            normalized_item = _normalize_message_role(normalized_item)
             normalized_item = _normalize_assistant_message_item(normalized_item, index)
             converted.append(normalized_item)
         system_items: list[Any] = []
         other_items: list[Any] = []
         for item in converted:
-            if isinstance(item, dict) and item.get("type") == "message" and item.get("role") == "system":
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "message"
+                and item.get("role") == "system"
+            ):
                 system_items.append(item)
             else:
                 other_items.append(item)
-        normalized['input'] = [*system_items, *other_items]
+        normalized["input"] = [*system_items, *other_items]
     tools = normalized.get("tools")
-    if FORCE_REQUIRED_TOOL_CHOICE and isinstance(tools, list) and tools:
-        tool_choice = normalized.get("tool_choice")
-        if tool_choice in (None, "auto"):
+    tool_choice = normalized.get("tool_choice")
+    if isinstance(tools, list) and tools:
+        if DISABLE_PARALLEL_TOOL_CALLS:
+            normalized["parallel_tool_calls"] = False
+        if FORCE_REQUIRED_TOOL_CHOICE and tool_choice in (None, "auto"):
             normalized["tool_choice"] = "required"
     if CLEAR_PREVIOUS_RESPONSE_ID and "previous_response_id" in normalized:
         normalized["previous_response_id"] = None
     return normalized
 
 
-def _extract_error_message(raw_body: bytes) -> str | None:
+def _extract_error_message(raw_body: bytes | memoryview[int]) -> str | None:
+    body = _to_bytes(raw_body)
     try:
-        payload = json.loads(raw_body.decode("utf-8"))
+        payload = json.loads(body.decode("utf-8"))
     except Exception:
         return None
+
     error = payload.get("error")
     if isinstance(error, dict):
         message = error.get("message")
@@ -192,6 +238,254 @@ def _sse_counts(raw_body: bytes) -> dict[str, int]:
     }
 
 
+def _remove_xml_tool_messages(output: Any) -> Any:
+    if not isinstance(output, list):
+        return output
+    has_function_call = any(
+        isinstance(item, dict) and item.get("type") == "function_call" for item in output
+    )
+    if not has_function_call:
+        return output
+
+    sanitized: list[Any] = []
+    for item in output:
+        if not isinstance(item, dict):
+            sanitized.append(item)
+            continue
+        if item.get("type") != "message":
+            sanitized.append(item)
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            sanitized.append(item)
+            continue
+        text_blob = "\n".join(
+            part.get("text", "")
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+        if (
+            "<tool_call>" in text_blob
+            or "<function=" in text_blob
+            or "</think>" in text_blob
+            or "<think>" in text_blob
+        ):
+            # Prefer the structured function_call object when mixed text includes
+            # tool-call XML or thought tags.
+            continue
+        sanitized.append(item)
+    return sanitized
+
+
+def _strip_assistant_text_from_output(output: Any) -> Any:
+    if not isinstance(output, list):
+        return output
+    has_function_call = any(
+        isinstance(item, dict) and item.get("type") == "function_call" for item in output
+    )
+    if not has_function_call:
+        return output
+
+    stripped: list[Any] = []
+    for item in output:
+        if not isinstance(item, dict):
+            stripped.append(item)
+            continue
+        if item.get("type") != "message":
+            stripped.append(item)
+            continue
+        if item.get("role") != "assistant":
+            stripped.append(item)
+            continue
+        updated = dict(item)
+        content = updated.get("content")
+        if not isinstance(content, list):
+            stripped.append(updated)
+            continue
+        new_content: list[Any] = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                part_copy = dict(part)
+                part_copy["text"] = ""
+                new_content.append(part_copy)
+            else:
+                new_content.append(part)
+        updated["content"] = new_content
+        stripped.append(updated)
+    return stripped
+
+
+def _sanitize_upstream_body_for_tool_calls(
+    raw_body: bytes,
+    content_type: str | None,
+) -> bytes:
+    media_type = content_type or ""
+    if media_type.startswith("application/json"):
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except Exception:
+            return raw_body
+        if isinstance(payload, dict):
+            mode = SANITIZE_MODE
+            if mode == "drop_xml_messages":
+                payload["output"] = _remove_xml_tool_messages(payload.get("output"))
+            elif mode in {"strip_assistant_text", "function_call_wins"}:
+                payload["output"] = _strip_assistant_text_from_output(payload.get("output"))
+            return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        return raw_body
+
+    if not media_type.startswith("text/event-stream"):
+        return raw_body
+
+    decoded = raw_body.decode("utf-8", errors="replace")
+    has_fc_stream = '"type":"function_call"' in decoded
+    blocks = decoded.split("\n\n")
+    rewritten_blocks: list[str] = []
+    for block in blocks:
+        if not block:
+            continue
+        block_lines = block.splitlines()
+        data_index = next((i for i, ln in enumerate(block_lines) if ln.startswith("data: ")), None)
+        if data_index is None:
+            rewritten_blocks.append(block)
+            continue
+        data_line = block_lines[data_index]
+        body = data_line[6:]
+        if body.strip() == "[DONE]":
+            rewritten_blocks.append(block)
+            continue
+        try:
+            event_payload = json.loads(body)
+        except Exception:
+            rewritten_blocks.append(block)
+            continue
+
+        if isinstance(event_payload, dict):
+            # Keep stream shape stable while suppressing assistant text payload
+            # on function-call turns.
+            if SANITIZE_MODE in {"strip_assistant_text", "function_call_wins"} and has_fc_stream:
+                event_type = event_payload.get("type")
+                if SANITIZE_MODE == "function_call_wins":
+                    if event_type in {
+                        "response.output_text.delta",
+                        "response.output_text.done",
+                    }:
+                        continue
+                    if event_type in {
+                        "response.content_part.added",
+                        "response.content_part.done",
+                    }:
+                        part = event_payload.get("part")
+                        if isinstance(part, dict) and part.get("type") == "output_text":
+                            continue
+                    if event_type in {
+                        "response.output_item.added",
+                        "response.output_item.done",
+                    }:
+                        item = event_payload.get("item")
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type") == "message"
+                            and item.get("role") == "assistant"
+                        ):
+                            continue
+                if SANITIZE_MODE in {"strip_assistant_text", "function_call_wins"}:
+                    if event_type == "response.output_text.delta" and isinstance(
+                        event_payload.get("delta"), str
+                    ):
+                        event_payload = dict(event_payload)
+                        event_payload["delta"] = ""
+                    elif event_type == "response.output_text.done" and isinstance(
+                        event_payload.get("text"), str
+                    ):
+                        event_payload = dict(event_payload)
+                        event_payload["text"] = ""
+                    elif event_type in {
+                        "response.content_part.added",
+                        "response.content_part.done",
+                    }:
+                        part = event_payload.get("part")
+                        if isinstance(part, dict) and part.get("type") == "output_text":
+                            updated_part = dict(part)
+                            updated_part["text"] = ""
+                            event_payload = dict(event_payload)
+                            event_payload["part"] = updated_part
+                    elif event_type in {
+                        "response.output_item.added",
+                        "response.output_item.done",
+                    }:
+                        item = event_payload.get("item")
+                        if (
+                            isinstance(item, dict)
+                            and item.get("type") == "message"
+                            and item.get("role") == "assistant"
+                        ):
+                            updated_item = dict(item)
+                            content = updated_item.get("content")
+                            if isinstance(content, list):
+                                new_content: list[Any] = []
+                                for part in content:
+                                    if (
+                                        isinstance(part, dict)
+                                        and part.get("type") == "output_text"
+                                    ):
+                                        part_copy = dict(part)
+                                        part_copy["text"] = ""
+                                        new_content.append(part_copy)
+                                    else:
+                                        new_content.append(part)
+                                updated_item["content"] = new_content
+                            event_payload = dict(event_payload)
+                            event_payload["item"] = updated_item
+            if isinstance(event_payload.get("response"), dict):
+                event_type = event_payload.get("type")
+                response_obj = dict(event_payload["response"])
+                should_sanitize = (
+                    SANITIZE_MODE != "completed_only" or event_type == "response.completed"
+                )
+                if should_sanitize:
+                    if SANITIZE_MODE == "drop_xml_messages":
+                        response_obj["output"] = _remove_xml_tool_messages(
+                            response_obj.get("output")
+                        )
+                    elif SANITIZE_MODE in {"strip_assistant_text", "function_call_wins"}:
+                        response_obj["output"] = _strip_assistant_text_from_output(
+                            response_obj.get("output")
+                        )
+                    else:
+                        response_obj["output"] = _remove_xml_tool_messages(
+                            response_obj.get("output")
+                        )
+                event_payload = dict(event_payload)
+                event_payload["response"] = response_obj
+                block_lines[data_index] = (
+                    f"data: {json.dumps(event_payload, separators=(',', ':'))}"
+                )
+                rewritten_blocks.append("\n".join(block_lines))
+                continue
+            block_lines[data_index] = f"data: {json.dumps(event_payload, separators=(',', ':'))}"
+            rewritten_blocks.append("\n".join(block_lines))
+            continue
+        rewritten_blocks.append(block)
+    if not rewritten_blocks:
+        return b""
+    return ("\n\n".join(rewritten_blocks) + "\n\n").encode("utf-8")
+
+
+def _sanitize_sse_block_for_tool_calls(block: str, has_fc_stream: bool) -> str | None:
+    if not block:
+        return None
+    sanitized = _sanitize_upstream_body_for_tool_calls(
+        (block + "\n\n").encode("utf-8"),
+        "text/event-stream",
+    ).decode("utf-8", errors="replace")
+    if not sanitized:
+        return None
+    if sanitized.endswith("\n\n"):
+        sanitized = sanitized[:-2]
+    return sanitized
+
+
 def _build_compat_retry_payload(payload: dict[str, Any]) -> dict[str, Any]:
     # Aggressive compatibility pass for chat templates that are strict about
     # role set and system-message placement.
@@ -202,9 +496,12 @@ def _build_compat_retry_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     cleaned: list[dict[str, Any]] = []
     for item in input_items:
-        if not isinstance(item, dict) or item.get("type") != "message":
+        if not isinstance(item, dict):
             continue
-        msg = dict(item)
+        msg = _coerce_message_item(item)
+        if msg.get("type") != "message":
+            continue
+        msg = dict(msg)
         role = msg.get("role")
         role_str = role.lower() if isinstance(role, str) else "user"
         if role_str in {"developer", "system"}:
@@ -267,7 +564,10 @@ def _forward_upstream(
     )
     try:
         with urlopen(upstream) as resp:
-            body = resp.read()
+            try:
+                body = resp.read()
+            except IncompleteRead as exc:
+                body = exc.partial
             return Response(
                 content=body,
                 status_code=resp.status,
@@ -281,7 +581,9 @@ def _forward_upstream(
         )
 
 
-def _log_upstream_response_shape(raw_body: bytes, content_type: str | None, status_code: int) -> None:
+def _log_upstream_response_shape(
+    raw_body: bytes, content_type: str | None, status_code: int
+) -> None:
     base: dict[str, Any] = {
         "kind": "responses_proxy_upstream_response",
         "status_code": status_code,
@@ -294,9 +596,7 @@ def _log_upstream_response_shape(raw_body: bytes, content_type: str | None, stat
         if raw_body:
             decoded = raw_body.decode("utf-8", errors="replace")
             snippet = decoded[:240]
-            base["body_preview"] = (
-                f"{snippet}...(truncated)" if len(raw_body) > 240 else snippet
-            )
+            base["body_preview"] = f"{snippet}...(truncated)" if len(raw_body) > 240 else snippet
             if (content_type or "").startswith("text/event-stream"):
                 base["sse_event_count"] = decoded.count("\nevent: ") + (
                     1 if decoded.startswith("event: ") else 0
@@ -435,7 +735,7 @@ async def model_detail_proxy(model_id: str, request: FastAPIRequest) -> Response
         return response
 
     try:
-        payload = json.loads(list_response.body.decode("utf-8"))
+        payload = json.loads(_to_bytes(list_response.body).decode("utf-8"))
     except Exception:
         return response
 
@@ -461,83 +761,113 @@ async def model_detail_proxy(model_id: str, request: FastAPIRequest) -> Response
     )
 
 
-@app.post('/v1/responses')
+@app.post("/v1/responses")
 async def responses_proxy(request: FastAPIRequest) -> Response:
     payload = await request.json()
     normalized = normalize_responses_payload(payload)
     _log_payload_shape(payload, normalized)
-    response = _forward_upstream(
-        path="/responses",
-        method="POST",
-        accept=request.headers.get("accept", "application/json"),
-        authorization=request.headers.get("authorization"),
-        data=json.dumps(normalized).encode("utf-8"),
-    )
-    error_message = _extract_error_message(response.body)
-    retry_trigger = (
-        response.status_code == 400
-        and isinstance(error_message, str)
-        and (
-            "Unexpected message role" in error_message
-            or "System message must be at the beginning" in error_message
-        )
-    )
-    if retry_trigger:
-        compat = _build_compat_retry_payload(payload)
-        print(
-            json.dumps(
-                {
-                    "kind": "responses_proxy_retry",
-                    "reason": error_message,
-                    "strategy": "compat_input_roles_and_order",
-                },
-                indent=2,
-            ),
-            flush=True,
-        )
-        response = _forward_upstream(
-            path="/responses",
-            method="POST",
-            accept=request.headers.get("accept", "application/json"),
-            authorization=request.headers.get("authorization"),
-            data=json.dumps(compat).encode("utf-8"),
-        )
+    accept = request.headers.get("accept", "application/json")
+    authorization = request.headers.get("authorization")
+    headers: dict[str, str] = {"Accept": accept, "Content-Type": "application/json"}
+    if authorization:
+        headers["Authorization"] = authorization
 
-    # If upstream succeeds but emits only XML tool tags (no structured
-    # function_call objects), retry once with required tool choice.
-    media_type = response.media_type or ""
-    if (
-        response.status_code == 200
-        and media_type.startswith("text/event-stream")
-        and isinstance(normalized.get("tools"), list)
-        and len(normalized.get("tools", [])) > 0
-        and normalized.get("tool_choice") in (None, "auto")
-    ):
-        counts = _sse_counts(response.body)
-        if counts["function_call_mentions"] == 0 and counts["tool_call_tag_mentions"] > 0:
-            retry_payload = dict(normalized)
-            retry_payload["tool_choice"] = "required"
+    upstream = requests.post(
+        f"{UPSTREAM_BASE_URL}/responses",
+        headers=headers,
+        data=json.dumps(normalized).encode("utf-8"),
+        stream=True,
+        timeout=None,
+    )
+    media_type = upstream.headers.get("content-type", "application/json").split(";")[0]
+
+    if not media_type.startswith("text/event-stream"):
+        try:
+            raw_body = upstream.content
+        finally:
+            upstream.close()
+        response = Response(content=raw_body, status_code=upstream.status_code, media_type=media_type)
+        error_message = _extract_error_message(raw_body)
+        retry_trigger = (
+            response.status_code == 400
+            and isinstance(error_message, str)
+            and ENABLE_COMPAT_RETRY
+            and (
+                "Unexpected message role" in error_message
+                or "System message must be at the beginning" in error_message
+            )
+        )
+        if retry_trigger:
+            compat = _build_compat_retry_payload(payload)
             print(
                 json.dumps(
                     {
                         "kind": "responses_proxy_retry",
-                        "reason": "xml_tool_call_without_function_call",
-                        "strategy": "force_tool_choice_required",
+                        "reason": error_message,
+                        "strategy": "compat_input_roles_and_order",
                     },
                     indent=2,
                 ),
                 flush=True,
             )
-            response = _forward_upstream(
+            return _forward_upstream(
                 path="/responses",
                 method="POST",
-                accept=request.headers.get("accept", "application/json"),
-                authorization=request.headers.get("authorization"),
-                data=json.dumps(retry_payload).encode("utf-8"),
+                accept=accept,
+                authorization=authorization,
+                data=json.dumps(compat).encode("utf-8"),
             )
-    _log_upstream_response_shape(
-        response.body,
-        response.media_type,
-        response.status_code,
-    )
-    return response
+        _log_upstream_response_shape(raw_body, media_type, response.status_code)
+        return response
+
+    async def generate() -> Any:
+        decoder = codecs.getincrementaldecoder("utf-8")()
+        buffered = ""
+        collected = bytearray()
+        has_fc_stream = False
+        try:
+            try:
+                for chunk in upstream.iter_content(chunk_size=None):
+                    if not chunk:
+                        continue
+                    buffered += decoder.decode(chunk)
+                    buffered = buffered.replace("\r\n", "\n")
+                    while "\n\n" in buffered:
+                        block, buffered = buffered.split("\n\n", 1)
+                        if not block:
+                            continue
+                        if '"type":"function_call"' in block:
+                            has_fc_stream = True
+                        rewritten = (
+                            _sanitize_sse_block_for_tool_calls(block, has_fc_stream)
+                            if SANITIZE_XML_TOOL_TEXT
+                            else block
+                        )
+                        if rewritten is None:
+                            continue
+                        payload_bytes = (rewritten + "\n\n").encode("utf-8")
+                        collected.extend(payload_bytes)
+                        yield payload_bytes
+            except requests.exceptions.ChunkedEncodingError:
+                pass
+            buffered += decoder.decode(b"", final=True)
+            buffered = buffered.replace("\r\n", "\n")
+            if buffered.strip():
+                if '"type":"function_call"' in buffered:
+                    has_fc_stream = True
+                rewritten = (
+                    _sanitize_sse_block_for_tool_calls(buffered, has_fc_stream)
+                    if SANITIZE_XML_TOOL_TEXT
+                    else buffered
+                )
+                if rewritten is not None:
+                    payload_bytes = (rewritten + "\n\n").encode("utf-8")
+                    collected.extend(payload_bytes)
+                    yield payload_bytes
+            _log_upstream_response_shape(bytes(collected), media_type, upstream.status_code)
+        except requests.exceptions.ChunkedEncodingError:
+            _log_upstream_response_shape(bytes(collected), media_type, upstream.status_code)
+        finally:
+            upstream.close()
+
+    return StreamingResponse(generate(), status_code=upstream.status_code, media_type=media_type)

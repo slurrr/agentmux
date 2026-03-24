@@ -1,8 +1,6 @@
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-import pytest
-
 from agentmux.runner import build_stack_plan, launch_stack
 from agentmux.runtime import RuntimeService, RuntimeStack, read_active, runtime_status, write_active
 

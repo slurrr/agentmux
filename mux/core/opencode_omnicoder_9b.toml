@@ -1,5 +1,5 @@
 [stack]
-name = "omnicoder"
+name = "omnicoder_oc"
 track = "lab"
 primary_service = "main"
 notes = "Minimal tool-capable Qwen3.5 base for agent testing through an OpenAI-compatible frontend."
@@ -23,7 +23,6 @@ served_model_name = "OmniCoder-9B"
 # extra_args = ["--disable-log-requests"]
 
 [services.main.env]
-VLLM_ENABLE_RESPONSES_API_STORE = "1"
 # CUDA_VISIBLE_DEVICES = "0"
 # HF_TOKEN = "${HF_TOKEN}"
 # VLLM_API_KEY = "${VLLM_API_KEY}"
@@ -38,10 +37,11 @@ exclude_tools_when_tool_choice_none = true
 enable_force_include_usage = true
 # attention_backend = "FLASH_ATTN"
 chat_template_content_format = "openai"
-default_chat_template_kwargs = "{\"enable_thinking\": false}"
+# default_chat_template_kwargs = "{\"enable_thinking\": false}"
 trust_request_chat_template = false
 trust_remote_code = true
 # generation_config = "auto"
+
 # swap_space = 0
 # structured_outputs_config = "{\"backend\":\"auto\"}"
 # tool_server = "http://127.0.0.1:9000"
@@ -54,7 +54,7 @@ trust_remote_code = true
 # - parallel_tool_calls
 
 [services.main.assets]
-chat_template = "assets/chat_templates/qwen3_codex_compat.jinja"
+# chat_template = "assets/chat_templates/qwen3_codex_compat.jinja"
 # tokenizer intentionally omitted for first-pass default tokenizer behavior
 
 # [[services.main.loras]]

@@ -7,8 +7,8 @@
   },
   "provider": {
     "local-vllm": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Local vLLM (Chat Completions)",
+      "npm": "@ai-sdk/openai",
+      "name": "Local vLLM (Responses)",
       "options": {
         "baseURL": "http://127.0.0.1:8002/v1",
         "apiKey": "dummy",

@@ -45,3 +45,17 @@ def test_normalize_responses_payload_moves_system_to_front() -> None:
     assert normalized['input'][0]['role'] == 'system'
     assert normalized['input'][1]['role'] == 'user'
     assert normalized['input'][2]['role'] == 'user'
+
+
+def test_normalize_responses_payload_coerces_role_only_items_to_messages() -> None:
+    payload = {
+        'input': [
+            {'role': 'developer', 'content': [{'type': 'input_text', 'text': 'rules'}]},
+            {'role': 'user', 'content': [{'type': 'input_text', 'text': 'u1'}]},
+        ]
+    }
+    normalized = normalize_responses_payload(payload)
+    assert normalized['input'][0]['type'] == 'message'
+    assert normalized['input'][0]['role'] == 'system'
+    assert normalized['input'][1]['type'] == 'message'
+    assert normalized['input'][1]['role'] == 'user'
