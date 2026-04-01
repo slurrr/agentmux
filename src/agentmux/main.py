@@ -148,7 +148,7 @@ def _print_render(stack_name: str, root: Path, as_json: bool) -> int:
 
 
 def _print_status(as_json: bool) -> int:
-    payload = runtime_status(read_active())
+    payload = runtime_status(read_active(prune_stale=True))
     if as_json:
         print(json.dumps(payload, indent=2))
         return 0
@@ -233,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if ready else 1
 
     if args.command == "down":
-        active = read_active()
+        active = read_active(prune_stale=True)
         if active is None:
             print("no active stack")
             return 0
@@ -250,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "smoke":
         stack_name = args.stack
         if stack_name is None:
-            active = read_active()
+            active = read_active(prune_stale=True)
             if active is None:
                 raise SystemExit("No active stack and no stack name provided")
             stack_name = active.stack

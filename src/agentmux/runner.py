@@ -44,6 +44,80 @@ ASSET_FLAG_MAP = {
 }
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _venv_site_packages_dir() -> Path | None:
+    lib_root = _repo_root() / ".venv" / "lib"
+    if not lib_root.is_dir():
+        return None
+    candidates = sorted(lib_root.glob("python*/site-packages"))
+    if not candidates:
+        return None
+    return candidates[-1]
+
+
+def _runtime_env() -> dict[str, str]:
+    env = os.environ.copy()
+    site_packages = _venv_site_packages_dir()
+    cuda_home: Path | None = None
+    for candidate in (Path("/usr/local/cuda"), Path("/usr/local/cuda-13.2")):
+        if candidate.is_dir():
+            cuda_home = candidate
+            break
+
+    if cuda_home is not None:
+        env.setdefault("CUDA_HOME", str(cuda_home))
+        env.setdefault("CUDA_PATH", str(cuda_home))
+        env.setdefault("CUDACXX", str(cuda_home / "bin" / "nvcc"))
+        gcc14 = Path("/usr/bin/g++-14")
+        if gcc14.is_file():
+            env.setdefault("NVCC_CCBIN", str(gcc14))
+        current_path = env.get("PATH", "")
+        path_parts = [str(cuda_home / "bin")]
+        if current_path:
+            path_parts.extend(part for part in current_path.split(":") if part)
+        deduped_path: list[str] = []
+        seen_path: set[str] = set()
+        for path in path_parts:
+            if path and path not in seen_path:
+                deduped_path.append(path)
+                seen_path.add(path)
+        env["PATH"] = ":".join(deduped_path)
+
+    if site_packages is None:
+        return env
+
+    lib_dirs: list[str] = []
+
+    torch_lib = site_packages / "torch" / "lib"
+    if torch_lib.is_dir():
+        lib_dirs.append(str(torch_lib))
+
+    nvidia_root = site_packages / "nvidia"
+    if nvidia_root.is_dir():
+        for child in sorted(nvidia_root.iterdir()):
+            lib_dir = child / "lib"
+            if lib_dir.is_dir():
+                lib_dirs.append(str(lib_dir))
+
+    current = env.get("LD_LIBRARY_PATH", "")
+    if current:
+        lib_dirs.extend(part for part in current.split(":") if part)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for path in lib_dirs:
+        if path and path not in seen:
+            deduped.append(path)
+            seen.add(path)
+
+    if deduped:
+        env["LD_LIBRARY_PATH"] = ":".join(deduped)
+    return env
+
+
 def _apply_loras(command: list[str], loras: list[LoraSpec]) -> None:
     enabled = [lora for lora in loras if lora.enabled]
     if not enabled:
@@ -111,7 +185,7 @@ def build_stack_plan(
 
     services: list[ServiceLaunchPlan] = []
     for service_name, service in stack.services.items():
-        env = os.environ.copy()
+        env = _runtime_env()
         env.update(stack.env)
         env.update(service.env)
 
@@ -132,7 +206,7 @@ def build_stack_plan(
 
 
 def launch_stack(stack_name: str, root: Path = STACK_ROOT) -> RuntimeStack:
-    active = read_active()
+    active = read_active(prune_stale=True)
     if active is not None and any(pid_is_running(service.pid) for service in active.services):
         raise RuntimeError(f"Active stack already running: {active.stack}")
 

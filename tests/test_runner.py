@@ -73,6 +73,7 @@ chat_template = "assets/chat_templates/from_assets.jinja"
 def test_launch_stack_writes_runtime_state(mock_popen, tmp_path: Path, monkeypatch) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENTMUX_RUN_ROOT", str(tmp_path / "runs" / "agentmux"))
     (tmp_path / "mux").symlink_to(repo_root / "mux")
     process = Mock()
     process.pid = 4242
@@ -89,7 +90,7 @@ def test_launch_stack_writes_runtime_state(mock_popen, tmp_path: Path, monkeypat
     assert status["services"][0]["pid"] == 4242
 
 
-@patch("agentmux.runner.pid_is_running", return_value=False)
+@patch("agentmux.runtime.pid_is_running", return_value=False)
 @patch("agentmux.runner.subprocess.Popen")
 def test_launch_stack_ignores_stale_active_state(
     mock_popen,
@@ -99,6 +100,7 @@ def test_launch_stack_ignores_stale_active_state(
 ) -> None:
     repo_root = Path(__file__).resolve().parents[1]
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("AGENTMUX_RUN_ROOT", str(tmp_path / "runs" / "agentmux"))
     (tmp_path / "mux").symlink_to(repo_root / "mux")
     write_active(
         RuntimeStack(
@@ -111,7 +113,7 @@ def test_launch_stack_ignores_stale_active_state(
                     pid=1111,
                     port=8000,
                     command=["uv", "run", "vllm"],
-                    log_path=".agentmux/logs/old.log",
+                    log_path=str(tmp_path / "runs" / "agentmux" / "logs" / "old.log"),
                     started_at=1.0,
                 )
             ],
@@ -126,3 +128,30 @@ def test_launch_stack_ignores_stale_active_state(
 
     assert mock_pid_is_running.called
     assert runtime_stack.stack == "example_vllm_recipes"
+
+
+def test_read_active_prunes_stale_state(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENTMUX_RUN_ROOT", str(tmp_path / "runs" / "agentmux"))
+    write_active(
+        RuntimeStack(
+            stack="stale",
+            track="core",
+            path="mux/core/stale.toml",
+            services=[
+                RuntimeService(
+                    name="old",
+                    pid=999999,
+                    port=8000,
+                    command=["uv", "run", "vllm"],
+                    log_path=str(tmp_path / "runs" / "agentmux" / "logs" / "old.log"),
+                    started_at=1.0,
+                )
+            ],
+            started_at=1.0,
+        )
+    )
+
+    active = read_active(prune_stale=True)
+
+    assert active is None
+    assert not (tmp_path / "runs" / "agentmux" / "state" / "active.json").exists()

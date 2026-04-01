@@ -59,10 +59,11 @@ uv run agentmux history
 ## Runtime Model
 - `agentmux` launches real `uv run vllm serve ...` commands
 - `vllm` owns serving and logs
-- `agentmux` keeps thin runtime metadata in `.agentmux/`
+- `agentmux` keeps thin runtime metadata under `~/runs/agentmux/`
 - `.env` is loaded automatically before rendering or launching
 
 ## Notes
 - Keep large model and LoRA stores outside the repo and reference them through `.env`-backed paths.
+- Runtime state and logs belong in `~/runs/agentmux/{state,logs}`, not inside the repo tree.
 - Use `render` to verify exactly what command a mux becomes.
 - This repo is for composing agent-serving stacks, not just storing raw backend flags.

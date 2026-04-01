@@ -1,6 +1,6 @@
 [stack]
 name = "omnicoder_oc"
-track = "lab"
+track = "core"
 primary_service = "main"
 notes = "Minimal tool-capable Qwen3.5 base for agent testing through an OpenAI-compatible frontend."
 
@@ -9,15 +9,15 @@ host = "0.0.0.0"
 
 [defaults.args]
 dtype = "bfloat16"
-gpu_memory_utilization = 0.933
-max_num_seqs = 4
+gpu_memory_utilization = 0.971
+max_num_seqs = 1
 tensor_parallel_size = 1
 
 [services.main]
 engine = "vllm"
-model = "${QUANT_ROOT}/OmniCoder-9B/fp8/runs/20260323T173415Z/OmniCoder3.5-9B-FP8-Dynamic"
+model = "${QUANT_ROOT}/omnicoder-9b/fp8/current"
 port = 8002
-served_model_name = "OmniCoder-9B"
+served_model_name = "omnicoder-9b"
 # host = "127.0.0.1"
 # notes = ""
 # extra_args = ["--disable-log-requests"]
@@ -26,10 +26,11 @@ served_model_name = "OmniCoder-9B"
 # CUDA_VISIBLE_DEVICES = "0"
 # HF_TOKEN = "${HF_TOKEN}"
 # VLLM_API_KEY = "${VLLM_API_KEY}"
+VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS= "1"
 
 [services.main.args]
 enable_prefix_caching = true
-max_model_len = 72896
+# max_model_len = 72896
 enable_auto_tool_choice = true
 tool_call_parser = "qwen3_xml"
 exclude_tools_when_tool_choice_none = true
@@ -41,8 +42,11 @@ chat_template_content_format = "openai"
 trust_request_chat_template = false
 trust_remote_code = true
 # generation_config = "auto"
+# kv_cache_memory_bytes overrides estimate for kv cache and does not respect gpu_memory_utilization
+kv_cache_memory_bytes = "11156174991"
+kv_cache_dtype = "fp8_e4m3"
+# calculate_kv_scales = true
 
-# swap_space = 0
 # structured_outputs_config = "{\"backend\":\"auto\"}"
 # tool_server = "http://127.0.0.1:9000"
 
@@ -60,5 +64,5 @@ trust_remote_code = true
 # [[services.main.loras]]
 # name = "coder"
 # path = "${LORA_ROOT}/coder-lora"
-# base_model = "Qwen3.5-9B"
+# base_model = ""
 # enabled = false

@@ -8,11 +8,31 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-RUNTIME_ROOT = Path(".agentmux")
-STATE_DIR = RUNTIME_ROOT / "state"
-LOG_DIR = RUNTIME_ROOT / "logs"
-ACTIVE_PATH = STATE_DIR / "active.json"
-HISTORY_PATH = STATE_DIR / "history.jsonl"
+def _runtime_root() -> Path:
+    configured = os.environ.get("AGENTMUX_RUN_ROOT", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return Path.home() / "runs" / "agentmux"
+
+
+def runtime_root() -> Path:
+    return _runtime_root()
+
+
+def state_dir() -> Path:
+    return runtime_root() / "state"
+
+
+def log_dir() -> Path:
+    return runtime_root() / "logs"
+
+
+def active_path() -> Path:
+    return state_dir() / "active.json"
+
+
+def history_path() -> Path:
+    return state_dir() / "history.jsonl"
 
 
 @dataclass(frozen=True)
@@ -35,41 +55,48 @@ class RuntimeStack:
 
 
 def ensure_runtime_dirs() -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    state_dir().mkdir(parents=True, exist_ok=True)
+    log_dir().mkdir(parents=True, exist_ok=True)
 
 
 def write_active(runtime_stack: RuntimeStack) -> None:
     ensure_runtime_dirs()
-    ACTIVE_PATH.write_text(json.dumps(asdict(runtime_stack), indent=2) + "\n", encoding="utf-8")
-    with HISTORY_PATH.open("a", encoding="utf-8") as handle:
+    active_path().write_text(json.dumps(asdict(runtime_stack), indent=2) + "\n", encoding="utf-8")
+    with history_path().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(runtime_stack)) + "\n")
 
 
-def read_active() -> RuntimeStack | None:
-    if not ACTIVE_PATH.exists():
+def read_active(*, prune_stale: bool = False) -> RuntimeStack | None:
+    path = active_path()
+    if not path.exists():
         return None
-    data = json.loads(ACTIVE_PATH.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
     services = [RuntimeService(**service) for service in data["services"]]
-    return RuntimeStack(
+    runtime_stack = RuntimeStack(
         stack=data["stack"],
         track=data["track"],
         path=data["path"],
         services=services,
         started_at=data["started_at"],
     )
+    if prune_stale and runtime_stack.services and not any(pid_is_running(service.pid) for service in runtime_stack.services):
+        clear_active()
+        return None
+    return runtime_stack
 
 
 def clear_active() -> None:
-    if ACTIVE_PATH.exists():
-        ACTIVE_PATH.unlink()
+    path = active_path()
+    if path.exists():
+        path.unlink()
 
 
 def load_history(limit: int = 20) -> list[RuntimeStack]:
-    if not HISTORY_PATH.exists():
+    path = history_path()
+    if not path.exists():
         return []
     entries: list[RuntimeStack] = []
-    for line in HISTORY_PATH.read_text(encoding="utf-8").splitlines()[-limit:]:
+    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
         if not line.strip():
             continue
         data = json.loads(line)
@@ -87,6 +114,15 @@ def load_history(limit: int = 20) -> list[RuntimeStack]:
 
 
 def pid_is_running(pid: int) -> bool:
+    proc_dir = Path("/proc") / str(pid)
+    stat_path = proc_dir / "stat"
+    if stat_path.exists():
+        try:
+            stat_fields = stat_path.read_text(encoding="utf-8").split()
+        except OSError:
+            stat_fields = []
+        if len(stat_fields) >= 3 and stat_fields[2] == "Z":
+            return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -135,4 +171,4 @@ def stop_runtime(runtime_stack: RuntimeStack) -> None:
 def next_log_path(stack_name: str, service_name: str) -> Path:
     ensure_runtime_dirs()
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    return LOG_DIR / f"{stamp}-{stack_name}-{service_name}.log"
+    return log_dir() / f"{stamp}-{stack_name}-{service_name}.log"

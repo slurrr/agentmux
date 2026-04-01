@@ -271,7 +271,8 @@ def load_stack(path: Path) -> StackSpec:
         raise ValueError("At least one service is required")
 
     name = stack.get("name", path.stem)
-    track = stack.get("track", path.parent.name)
+    inferred_track = path.parent.name
+    track = stack.get("track", inferred_track)
     primary_service = stack.get("primary_service")
     notes = stack.get("notes")
 
@@ -279,6 +280,10 @@ def load_stack(path: Path) -> StackSpec:
         raise ValueError("stack.name must be a non-empty string")
     if not isinstance(track, str) or track not in TRACKS:
         raise ValueError(f"stack.track must be one of {', '.join(TRACKS)}")
+    if track != inferred_track:
+        raise ValueError(
+            f"stack.track={track!r} does not match manifest directory {inferred_track!r}: {path}"
+        )
     if primary_service is None:
         primary_service = next(iter(services))
     if not isinstance(primary_service, str) or not primary_service:

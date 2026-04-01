@@ -115,7 +115,7 @@ Use this map before scanning the codebase.
 - `docs/decisions/`: durable architecture and repo-structure decisions.
 - `tests/`: behavior coverage for manifests, rendering, CLI, runtime, and smoke behavior.
 - `scripts/dev.sh`: canonical local checks.
-- `.agentmux/`: local runtime state and logs written at runtime; not source.
+- `~/runs/agentmux/`: local runtime state and logs written at runtime; not source.
 
 When making changes, read the smallest relevant surface first instead of exploring broadly.
 
