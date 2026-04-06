@@ -43,6 +43,7 @@ class RuntimeService:
     command: list[str]
     log_path: str
     started_at: float
+    managed: bool = True
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,8 @@ def load_history(limit: int = 20) -> list[RuntimeStack]:
 
 
 def pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
     proc_dir = Path("/proc") / str(pid)
     stat_path = proc_dir / "stat"
     if stat_path.exists():
@@ -161,6 +164,8 @@ def runtime_status(runtime_stack: RuntimeStack | None) -> dict[str, Any]:
 
 def stop_runtime(runtime_stack: RuntimeStack) -> None:
     for service in runtime_stack.services:
+        if not service.managed or service.pid <= 0:
+            continue
         try:
             os.killpg(os.getpgid(service.pid), signal.SIGTERM)
         except ProcessLookupError:

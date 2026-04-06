@@ -104,6 +104,30 @@ This renders to:
 
 This is the preferred place for routine experimentation and day-to-day serving config.
 
+### Server-wide generation defaults (`generation_config`)
+vLLM supports a HuggingFace-style `generation_config.json` that can change server-wide default
+sampling parameters (and can also impose a global output cap via `max_new_tokens`).
+
+These are ordinary vLLM flags, so they live under `args`:
+
+```toml
+[services.main.args]
+generation_config = "auto" # or "vllm" or "/path/to/dir"
+override_generation_config = { temperature = 0.2, top_p = 0.95 }
+```
+
+Behavior:
+- `generation_config = "auto"` loads the model's own `generation_config.json` from the model path.
+- `generation_config = "vllm"` skips generation config and uses vLLM's neutral defaults.
+- `generation_config = "/path/to/dir"` loads a `generation_config.json` from that directory.
+
+Reference example: `mux/archive/example_generation_config.json` shows the shape of the file. To
+use it with vLLM, copy it into a directory as `generation_config.json` and point
+`generation_config` at that directory.
+
+For multiple agent-level sampling profiles on one loaded model (without multiple vLLM
+processes), see `docs/reference/sampling-profiles.md`.
+
 ### Asset references
 Services can carry versioned mux assets that compile into launch behavior when the repo models them
 as operational inputs.
@@ -146,6 +170,23 @@ path = "coder-lora"
 base_model = "Qwen2.5-7B-Instruct"
 enabled = false
 ```
+
+### Stack memory sidecar (`[stack.memory]`)
+A stack can optionally launch Hindsight as a local memory sidecar.
+
+```toml
+[stack.memory]
+provider = "hindsight"
+host = "127.0.0.1"
+port = 8888
+data_dir = "~/data/hindsight"
+```
+
+Behavior:
+- `provider = "hindsight"` enables memory sidecar launch.
+- If omitted, no Hindsight process is launched.
+- Hindsight LLM settings are derived from the stack primary service.
+- `llm_provider`, `llm_model`, `llm_api_key`, and `llm_base_url` are not allowed in `[stack.memory]`.
 
 ### Multi-service stacks
 A stack can contain more than one service. That is useful for future team-style topologies even if you usually run one primary service today.

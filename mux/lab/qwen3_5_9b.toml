@@ -41,6 +41,8 @@ chat_template_content_format = "openai"
 # trust_request_chat_template = false
 # generation_config = "auto"
 
+# calculate_kv_scales = true *does not work with qwen's hybrid attention
+
 # swap_space = 0
 # structured_outputs_config = "{\"backend\":\"auto\"}"
 # tool_server = "http://127.0.0.1:9000"

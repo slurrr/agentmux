@@ -47,6 +47,14 @@ class ServiceSpec:
 
 
 @dataclass(frozen=True)
+class MemorySpec:
+    provider: str
+    host: str
+    port: int
+    data_dir: str
+
+
+@dataclass(frozen=True)
 class StackSpec:
     name: str
     track: str
@@ -55,6 +63,7 @@ class StackSpec:
     notes: str | None
     env: dict[str, str]
     services: dict[str, ServiceSpec]
+    memory: MemorySpec | None
 
 
 def _load_toml(path: Path) -> dict[str, object]:
@@ -251,6 +260,59 @@ def _service_from_data(
     )
 
 
+def _memory_from_stack(value: object) -> MemorySpec | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("stack.memory must be a table")
+
+    if "provider" not in value:
+        raise ValueError("stack.memory.provider is required when stack.memory is set")
+    provider = value.get("provider")
+    if not isinstance(provider, str) or not provider:
+        raise ValueError("stack.memory.provider must be a non-empty string")
+    if provider != "hindsight":
+        raise ValueError("stack.memory.provider must be 'hindsight' in v1")
+
+    disallowed_override_keys = {
+        "llm_provider",
+        "llm_model",
+        "llm_api_key",
+        "llm_base_url",
+    }
+    attempted = sorted(disallowed_override_keys & set(value.keys()))
+    if attempted:
+        names = ", ".join(attempted)
+        raise ValueError(
+            f"stack.memory does not allow overriding derived LLM fields: {names}"
+        )
+
+    allowed_keys = {"provider", "host", "port", "data_dir"}
+    unknown = sorted(set(value.keys()) - allowed_keys)
+    if unknown:
+        names = ", ".join(unknown)
+        raise ValueError(f"stack.memory contains unsupported field(s): {names}")
+
+    host = value.get("host", "127.0.0.1")
+    port = value.get("port", 8888)
+    data_dir = value.get("data_dir", "~/data/hindsight")
+
+    if not isinstance(host, str) or not host:
+        raise ValueError("stack.memory.host must be a non-empty string")
+    if not isinstance(port, int):
+        raise ValueError("stack.memory.port must be an integer")
+    if not isinstance(data_dir, str) or not data_dir:
+        raise ValueError("stack.memory.data_dir must be a non-empty string")
+
+    expanded_data_dir = _expand_env(data_dir, "stack.memory.data_dir")
+    return MemorySpec(
+        provider=provider,
+        host=host,
+        port=port,
+        data_dir=str(Path(expanded_data_dir).expanduser()),
+    )
+
+
 def load_stack(path: Path) -> StackSpec:
     load_dotenv(dotenv_path=Path(".env"))
     if not path.exists():
@@ -275,6 +337,7 @@ def load_stack(path: Path) -> StackSpec:
     track = stack.get("track", inferred_track)
     primary_service = stack.get("primary_service")
     notes = stack.get("notes")
+    memory = _memory_from_stack(stack.get("memory"))
 
     if not isinstance(name, str) or not name:
         raise ValueError("stack.name must be a non-empty string")
@@ -311,6 +374,7 @@ def load_stack(path: Path) -> StackSpec:
         notes=notes,
         env=stack_env,
         services=parsed_services,
+        memory=memory,
     )
 
 

@@ -1,11 +1,16 @@
 [stack]
-name = "omnicoder_oc"
+name = "pi_ghosty"
 track = "core"
 primary_service = "main"
 notes = "Minimal tool-capable Qwen3.5 base for agent testing through an OpenAI-compatible frontend."
 
 [defaults]
 host = "0.0.0.0"
+
+[defaults.env]
+HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU = "true"
+HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU = "true"
+HINDSIGHT_API_LAZY_RERANKER = "true"
 
 [defaults.args]
 dtype = "bfloat16"
@@ -26,7 +31,7 @@ extra_args = ["--disable-uvicorn-access-log"]
 # CUDA_VISIBLE_DEVICES = "0"
 # HF_TOKEN = "${HF_TOKEN}"
 # VLLM_API_KEY = "${VLLM_API_KEY}"
-VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS= "1"
+VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS = "1"
 
 [services.main.args]
 enable_prefix_caching = true
@@ -49,3 +54,8 @@ kv_cache_dtype = "fp8_e4m3"
 
 [services.main.assets]
 
+[stack.memory]
+provider = "hindsight"
+host = "127.0.0.1"
+port = 8888
+data_dir = "${HINDSIGHT_DATA_ROOT}"

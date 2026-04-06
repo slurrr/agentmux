@@ -20,6 +20,7 @@ dependencies = [
     "torchvision==0.25.0+cu130",
     "transformers==5.3.0",
     "vllm==0.18.0",
+    "hindsight-all>=0.4.22",
 ]
 
 [project.scripts]

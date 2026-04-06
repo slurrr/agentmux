@@ -100,6 +100,16 @@ def _stack_payload(stack_name: str, root: Path, include_archive: bool = True) ->
             }
             for name, service in stack.services.items()
         },
+        "memory": (
+            {
+                "provider": stack.memory.provider,
+                "host": stack.memory.host,
+                "port": stack.memory.port,
+                "data_dir": stack.memory.data_dir,
+            }
+            if stack.memory is not None
+            else None
+        ),
     }
 
 
@@ -138,12 +148,26 @@ def _print_render(stack_name: str, root: Path, as_json: bool) -> int:
             }
             for service in plan.services
         ],
+        "memory": (
+            {
+                "name": plan.memory.service,
+                "port": plan.memory.port,
+                "host": plan.memory.host,
+                "managed": plan.memory.managed,
+                "command": plan.memory.command,
+            }
+            if plan.memory is not None
+            else None
+        ),
     }
     if as_json:
         print(json.dumps(payload, indent=2))
     else:
         for service in plan.services:
             print(f"[{service.service}] {service.shell_command()}")
+        if plan.memory is not None:
+            prefix = "(reuse) " if not plan.memory.managed else ""
+            print(f"[{plan.memory.service}] {prefix}{plan.memory.shell_command()}")
     return 0
 
 
@@ -221,16 +245,17 @@ def main(argv: list[str] | None = None) -> int:
         runtime_stack = launch_stack(args.stack, root=args.root)
         print(f"started stack: {runtime_stack.stack}")
         for service in runtime_stack.services:
-            service_spec = stack.services[service.name]
+            if service.name in stack.services:
+                service_spec = stack.services[service.name]
+                url = _service_base_url(service_spec.host, service.port)
+            else:
+                url = f"http://127.0.0.1:{service.port}"
+            managed_note = "" if service.managed else " (external)"
             print(
                 f"  {service.name}: pid={service.pid} port={service.port} "
-                f"url={_service_base_url(service_spec.host, service.port)} log={service.log_path}"
+                f"url={url} log={service.log_path}{managed_note}"
             )
-        primary_runtime = next(
-            service for service in runtime_stack.services if service.name == stack.primary_service
-        )
-        ready = _follow_startup_log(Path(primary_runtime.log_path), primary_runtime.pid)
-        return 0 if ready else 1
+        return 0
 
     if args.command == "down":
         active = read_active(prune_stale=True)
