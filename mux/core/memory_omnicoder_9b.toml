@@ -15,7 +15,7 @@ HINDSIGHT_API_LAZY_RERANKER = "true"
 [defaults.args]
 dtype = "bfloat16"
 gpu_memory_utilization = 0.98
-max_num_seqs = 2
+max_num_seqs = 4
 tensor_parallel_size = 1
 
 [services.main]
@@ -29,8 +29,6 @@ extra_args = ["--disable-uvicorn-access-log"]
 
 [services.main.env]
 # CUDA_VISIBLE_DEVICES = "0"
-# HF_TOKEN = "${HF_TOKEN}"
-# VLLM_API_KEY = "${VLLM_API_KEY}"
 VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS = "1"
 
 [services.main.args]
