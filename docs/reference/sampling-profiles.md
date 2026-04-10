@@ -56,8 +56,12 @@ unstable, only use the proxy for non-streaming experiments.
 
 ### Which Fields Matter
 
-For vLLM 0.18.0, the server-wide generation defaults path (`generation_config`) and the model
-config code path explicitly recognize these sampling keys:
+There are two different surfaces:
+
+1. Server-wide defaults via `generation_config.json` / `override_generation_config`
+
+vLLM 0.18.0 only pulls a small subset of sampling keys from the generation config into its
+server-wide default sampling params:
 - `repetition_penalty`
 - `temperature`
 - `top_k`
@@ -65,7 +69,19 @@ config code path explicitly recognize these sampling keys:
 - `min_p`
 - `max_new_tokens` (mapped to request `max_tokens`)
 
-Other OpenAI-ish knobs may exist, but this list is the safest "profile" surface to start with.
+So even if a model's `generation_config.json` contains additional OpenAI-ish knobs, vLLM may not
+apply them as server-wide defaults.
+
+2. Per-request OpenAI sampling knobs (what proxies should inject)
+
+vLLM supports a broader set of per-request sampling knobs (OpenAI-compatible request bodies).
+If you're doing profile proxies, inject the knobs you care about into the request body, not via
+`generation_config.json`.
+
+A safe "profile defaults" set to start with for per-request injection:
+- `temperature`, `top_p`, `top_k`, `min_p`
+- `presence_penalty`, `frequency_penalty`, `repetition_penalty`
+- `max_tokens`
 
 ### Current Repo State (What You Can Reuse)
 
@@ -100,4 +116,3 @@ Use `generation_config` when you want one server-wide default behavior.
 Use profile proxies when you want multiple "default personalities" on one loaded model.
 
 `generation_config` docs in this repo: `mux/README.md`.
-

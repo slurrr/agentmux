@@ -1,8 +1,8 @@
 [stack]
 name = "example_two_service"
-track = "archive"
+track = "examples"
 primary_service = "router_default"
-notes = "Reference-only example showing the current manifest surface and future multi-service shape."
+notes = "Reference-only example showing the normal multi-service manifest shape."
 
 [defaults]
 host = "0.0.0.0"

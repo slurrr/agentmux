@@ -22,5 +22,5 @@ def test_list_outputs_track_prefixed_stacks(capsys) -> None:
     rc = main(["list", "--include-archive"])
     captured = capsys.readouterr()
     assert rc == 0
-    assert "archive/example_vllm_recipes" in captured.out
-    assert "archive/example_two_service" in captured.out
+    assert "examples/example_vllm_recipes" in captured.out
+    assert "examples/example_two_service" in captured.out

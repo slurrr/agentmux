@@ -1,8 +1,8 @@
 [stack]
 name = "example_hindsight_memory"
-track = "archive"
+track = "examples"
 primary_service = "main"
-notes = "Reference-only example: vLLM service with optional hindsight sidecar."
+notes = "Reference-only example: vLLM service with Hindsight as a normal stack service."
 
 [defaults]
 host = "0.0.0.0"
@@ -24,8 +24,9 @@ attention_backend = "FLASH_ATTN"
 [services.main.assets]
 chat_template = "assets/chat_templates/qwen25_default.jinja"
 
-[stack.memory]
-provider = "hindsight"
+[services.memory]
+engine = "hindsight"
 host = "127.0.0.1"
 port = 8888
 data_dir = "~/data/hindsight"
+llm_service = "main"

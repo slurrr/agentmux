@@ -13,15 +13,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from agentmux.config import (
-    STACK_ROOT,
-    FlagValue,
-    LoraSpec,
-    MemorySpec,
-    ServiceSpec,
-    StackSpec,
-    resolve_stack,
-)
+from agentmux.config import STACK_ROOT, FlagValue, LoraSpec, ServiceSpec, StackSpec, resolve_stack
 from agentmux.runtime import (
     RuntimeService,
     RuntimeStack,
@@ -36,23 +28,13 @@ from agentmux.runtime import (
 class ServiceLaunchPlan:
     stack: str
     service: str
-    env: dict[str, str]
-    command: list[str]
-    port: int
-
-    def shell_command(self) -> str:
-        return shlex.join(self.command)
-
-
-@dataclass(frozen=True)
-class MemoryLaunchPlan:
-    stack: str
-    service: str
+    engine: str
     env: dict[str, str]
     command: list[str]
     port: int
     host: str
-    managed: bool
+    managed: bool = True
+    waits_for: str | None = None
 
     def shell_command(self) -> str:
         return shlex.join(self.command)
@@ -62,7 +44,6 @@ class MemoryLaunchPlan:
 class StackLaunchPlan:
     stack: StackSpec
     services: list[ServiceLaunchPlan]
-    memory: MemoryLaunchPlan | None
 
 
 ASSET_FLAG_MAP = {
@@ -179,8 +160,9 @@ def _apply_flag_map(
 
 def _apply_assets(command: list[str], service: ServiceSpec) -> set[str]:
     applied_keys: set[str] = set()
+    assets = service.assets.values if service.assets is not None else {}
     for key, flag in ASSET_FLAG_MAP.items():
-        value = service.assets.values.get(key)
+        value = assets.get(key)
         if value:
             command.extend([flag, value])
             applied_keys.add(key)
@@ -188,6 +170,8 @@ def _apply_assets(command: list[str], service: ServiceSpec) -> set[str]:
 
 
 def _build_vllm_command(service: ServiceSpec) -> list[str]:
+    if service.model is None:
+        raise ValueError(f"vllm service {service.name} is missing model")
     command = [
         "uv",
         "run",
@@ -202,9 +186,9 @@ def _build_vllm_command(service: ServiceSpec) -> list[str]:
     if service.served_model_name:
         command.extend(["--served-model-name", service.served_model_name])
     asset_keys = _apply_assets(command, service)
-    _apply_flag_map(command, service.args, excluded_keys=asset_keys)
-    _apply_loras(command, service.loras)
-    command.extend(service.extra_args)
+    _apply_flag_map(command, service.args or {}, excluded_keys=asset_keys)
+    _apply_loras(command, service.loras or [])
+    command.extend(service.extra_args or [])
     return command
 
 
@@ -243,49 +227,58 @@ def _hindsight_healthcheck(host: str, port: int) -> bool:
     return False
 
 
-def _build_memory_plan(stack: StackSpec, memory: MemorySpec, base_env: dict[str, str]) -> MemoryLaunchPlan:
-    primary = stack.services[stack.primary_service]
-    llm_model = primary.served_model_name or primary.model
-    llm_base_url = _service_base_url(primary.host, primary.port)
+def _build_hindsight_plan(stack: StackSpec, service: ServiceSpec, env: dict[str, str]) -> ServiceLaunchPlan:
+    if service.llm_service is None:
+        raise ValueError(f"hindsight service {service.name} is missing llm_service")
+    target = stack.services[service.llm_service]
+    if target.model is None:
+        raise ValueError(
+            f"services.{service.name}.llm_service must reference a vllm service with a model"
+        )
+    llm_model = target.served_model_name or target.model
+    llm_base_url = _service_base_url(target.host, target.port)
 
-    env = dict(base_env)
-    env.update(
+    derived_env = dict(env)
+    derived_env.update(
         {
-            "HINDSIGHT_BIND_HOST": memory.host,
-            "HINDSIGHT_BIND_PORT": str(memory.port),
-            "HINDSIGHT_DATA_DIR": memory.data_dir,
+            "HINDSIGHT_BIND_HOST": service.host,
+            "HINDSIGHT_BIND_PORT": str(service.port),
+            "HINDSIGHT_DATA_DIR": service.data_dir or str(Path.home() / "data" / "hindsight"),
             "HINDSIGHT_LLM_PROVIDER": "openai",
             "HINDSIGHT_LLM_MODEL": llm_model,
-            "HINDSIGHT_LLM_API_KEY": env.get("HINDSIGHT_LLM_API_KEY", "dummy"),
+            "HINDSIGHT_LLM_API_KEY": derived_env.get("HINDSIGHT_LLM_API_KEY", "dummy"),
             "HINDSIGHT_LLM_BASE_URL": llm_base_url,
         }
     )
 
-    if _port_is_in_use(memory.host, memory.port):
-        if _hindsight_healthcheck(memory.host, memory.port):
-            return MemoryLaunchPlan(
+    if _port_is_in_use(service.host, service.port):
+        if _hindsight_healthcheck(service.host, service.port):
+            return ServiceLaunchPlan(
                 stack=stack.name,
-                service="hindsight",
-                env=env,
-                command=["external-hindsight", f"http://{memory.host}:{memory.port}"],
-                port=memory.port,
-                host=memory.host,
+                service=service.name,
+                engine=service.engine,
+                env=derived_env,
+                command=["external-hindsight", f"http://{service.host}:{service.port}"],
+                port=service.port,
+                host=service.host,
                 managed=False,
+                waits_for=service.llm_service,
             )
         raise RuntimeError(
-            f"stack.memory requested hindsight on {memory.host}:{memory.port}, "
+            f"services.{service.name} requested hindsight on {service.host}:{service.port}, "
             "but the port is already in use by another process"
         )
 
-    command = ["uv", "run", "python", "scripts/hindsight_dev.py"]
-    return MemoryLaunchPlan(
+    return ServiceLaunchPlan(
         stack=stack.name,
-        service="hindsight",
-        env=env,
-        command=command,
-        port=memory.port,
-        host=memory.host,
+        service=service.name,
+        engine=service.engine,
+        env=derived_env,
+        command=["uv", "run", "python", "scripts/hindsight_dev.py"],
+        port=service.port,
+        host=service.host,
         managed=True,
+        waits_for=service.llm_service,
     )
 
 
@@ -305,22 +298,27 @@ def build_stack_plan(
         env = dict(base_env)
         env.update(service.env)
 
-        if service.engine != "vllm":
-            raise ValueError(f"Unsupported engine in v1: {service.engine}")
-
-        services.append(
-            ServiceLaunchPlan(
-                stack=stack.name,
-                service=service_name,
-                env=env,
-                command=_build_vllm_command(service),
-                port=service.port,
+        if service.engine == "vllm":
+            services.append(
+                ServiceLaunchPlan(
+                    stack=stack.name,
+                    service=service_name,
+                    engine=service.engine,
+                    env=env,
+                    command=_build_vllm_command(service),
+                    port=service.port,
+                    host=service.host,
+                )
             )
-        )
+            continue
 
-    memory_plan = _build_memory_plan(stack, stack.memory, base_env) if stack.memory else None
+        if service.engine == "hindsight":
+            services.append(_build_hindsight_plan(stack, service, env))
+            continue
 
-    return StackLaunchPlan(stack=stack, services=services, memory=memory_plan)
+        raise ValueError(f"Unsupported engine in v1: {service.engine}")
+
+    return StackLaunchPlan(stack=stack, services=services)
 
 
 def _terminate_runtime_services(services: list[RuntimeService]) -> None:
@@ -346,7 +344,7 @@ def _drain_log_chunk(log_path: str, offset: int) -> tuple[int, str]:
         return offset, ""
 
 
-def _wait_for_primary_ready(service: RuntimeService, host: str) -> bool:
+def _wait_for_vllm_ready(service: RuntimeService, host: str) -> bool:
     deadline = time.time() + PRIMARY_STARTUP_TIMEOUT_SECONDS
     offset = 0
     while time.time() < deadline:
@@ -395,6 +393,25 @@ def _wait_for_hindsight_ready(service: RuntimeService, host: str) -> bool:
         time.sleep(HINDSIGHT_STARTUP_POLL_SECONDS)
 
 
+def _wait_for_dependency(plan: StackLaunchPlan, runtime_services: list[RuntimeService], dependency_name: str) -> None:
+    dependency_runtime = next((service for service in runtime_services if service.name == dependency_name), None)
+    if dependency_runtime is None:
+        raise RuntimeError(f"Required dependency service was not launched: {dependency_name}")
+
+    dependency_spec = plan.stack.services[dependency_name]
+    if dependency_spec.engine == "vllm":
+        if not _wait_for_vllm_ready(dependency_runtime, dependency_spec.host):
+            raise RuntimeError(
+                "Dependency service did not become ready before dependent startup. "
+                f"service={dependency_name} log={dependency_runtime.log_path}"
+            )
+        return
+
+    raise RuntimeError(
+        f"Unsupported dependency readiness check in v1: {dependency_spec.engine}"
+    )
+
+
 def launch_stack(stack_name: str, root: Path = STACK_ROOT) -> RuntimeStack:
     active = read_active(prune_stale=True)
     if active is not None and any(pid_is_running(service.pid) for service in active.services):
@@ -405,6 +422,67 @@ def launch_stack(stack_name: str, root: Path = STACK_ROOT) -> RuntimeStack:
 
     try:
         for service in plan.services:
+            if service.waits_for is not None:
+                _wait_for_dependency(plan, runtime_services, service.waits_for)
+
+            if service.engine == "hindsight" and service.managed:
+                started_runtime: RuntimeService | None = None
+                latest_log_path = ""
+                for attempt in range(1, HINDSIGHT_START_MAX_ATTEMPTS + 1):
+                    log_path = next_log_path(plan.stack.name, service.service)
+                    latest_log_path = str(log_path)
+                    with log_path.open("ab") as log_handle:
+                        process = subprocess.Popen(
+                            service.command,
+                            env=service.env,
+                            stdout=log_handle,
+                            stderr=subprocess.STDOUT,
+                            start_new_session=True,
+                        )
+                    candidate = RuntimeService(
+                        name=service.service,
+                        pid=process.pid,
+                        port=service.port,
+                        command=service.command,
+                        log_path=str(log_path),
+                        started_at=time.time(),
+                        managed=True,
+                    )
+                    if _wait_for_hindsight_ready(candidate, service.host):
+                        started_runtime = candidate
+                        runtime_services.append(started_runtime)
+                        break
+                    _terminate_runtime_services([candidate])
+                    if attempt < HINDSIGHT_START_MAX_ATTEMPTS:
+                        print(
+                            f"warning: hindsight startup attempt {attempt}/{HINDSIGHT_START_MAX_ATTEMPTS} failed; retrying...",
+                            flush=True,
+                        )
+                        time.sleep(HINDSIGHT_START_RETRY_DELAY_SECONDS)
+                if started_runtime is None:
+                    raise RuntimeError(
+                        "Hindsight service failed to become ready after retries. "
+                        f"See latest log: {latest_log_path}"
+                    )
+                continue
+
+            if service.engine == "hindsight" and not service.managed:
+                print(
+                    f"Hindsight already up and running at http://{service.host}:{service.port}; reusing"
+                )
+                runtime_services.append(
+                    RuntimeService(
+                        name=service.service,
+                        pid=0,
+                        port=service.port,
+                        command=service.command,
+                        log_path="(external)",
+                        started_at=time.time(),
+                        managed=False,
+                    )
+                )
+                continue
+
             log_path = next_log_path(plan.stack.name, service.service)
             with log_path.open("ab") as log_handle:
                 process = subprocess.Popen(
@@ -424,72 +502,6 @@ def launch_stack(stack_name: str, root: Path = STACK_ROOT) -> RuntimeStack:
                     started_at=time.time(),
                 )
             )
-
-        if plan.memory is not None:
-            primary_runtime = next(
-                (service for service in runtime_services if service.name == plan.stack.primary_service),
-                None,
-            )
-            if primary_runtime is not None:
-                primary_spec = plan.stack.services[plan.stack.primary_service]
-                if not _wait_for_primary_ready(primary_runtime, primary_spec.host):
-                    raise RuntimeError(
-                        "Primary service did not become ready before memory startup. "
-                        f"See log: {primary_runtime.log_path}"
-                    )
-
-            if plan.memory.managed:
-                memory_runtime: RuntimeService | None = None
-                for attempt in range(1, HINDSIGHT_START_MAX_ATTEMPTS + 1):
-                    log_path = next_log_path(plan.stack.name, plan.memory.service)
-                    with log_path.open("ab") as log_handle:
-                        process = subprocess.Popen(
-                            plan.memory.command,
-                            env=plan.memory.env,
-                            stdout=log_handle,
-                            stderr=subprocess.STDOUT,
-                            start_new_session=True,
-                        )
-                    candidate = RuntimeService(
-                        name=plan.memory.service,
-                        pid=process.pid,
-                        port=plan.memory.port,
-                        command=plan.memory.command,
-                        log_path=str(log_path),
-                        started_at=time.time(),
-                        managed=True,
-                    )
-                    if _wait_for_hindsight_ready(candidate, plan.memory.host):
-                        memory_runtime = candidate
-                        runtime_services.append(memory_runtime)
-                        break
-                    _terminate_runtime_services([candidate])
-                    if attempt < HINDSIGHT_START_MAX_ATTEMPTS:
-                        print(
-                            f"warning: hindsight startup attempt {attempt}/{HINDSIGHT_START_MAX_ATTEMPTS} failed; retrying...",
-                            flush=True,
-                        )
-                        time.sleep(HINDSIGHT_START_RETRY_DELAY_SECONDS)
-                if memory_runtime is None:
-                    raise RuntimeError(
-                        "Hindsight sidecar failed to become ready after retries. "
-                        f"See latest log: {log_path}"
-                    )
-            else:
-                print(
-                    f"Hindsight already up and running at http://{plan.memory.host}:{plan.memory.port}; reusing"
-                )
-                runtime_services.append(
-                    RuntimeService(
-                        name=plan.memory.service,
-                        pid=0,
-                        port=plan.memory.port,
-                        command=plan.memory.command,
-                        log_path="(external)",
-                        started_at=time.time(),
-                        managed=False,
-                    )
-                )
 
         runtime_stack = RuntimeStack(
             stack=plan.stack.name,

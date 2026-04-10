@@ -1,16 +1,14 @@
 [stack]
 name = "pi_ghosty"
 track = "core"
-primary_service = "main"
+primary_service = "llm"
 notes = "Minimal tool-capable Qwen3.5 base for agent testing through an OpenAI-compatible frontend."
 
 [defaults]
 host = "0.0.0.0"
 
 [defaults.env]
-HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU = "true"
-HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU = "true"
-HINDSIGHT_API_LAZY_RERANKER = "true"
+
 
 [defaults.args]
 dtype = "bfloat16"
@@ -18,7 +16,7 @@ gpu_memory_utilization = 0.98
 max_num_seqs = 4
 tensor_parallel_size = 1
 
-[services.main]
+[services.llm]
 engine = "vllm"
 model = "${QUANT_ROOT}/omnicoder-9b/fp8/current"
 port = 8002
@@ -27,11 +25,11 @@ served_model_name = "omnicoder-9b"
 # notes = ""
 extra_args = ["--disable-uvicorn-access-log"]
 
-[services.main.env]
+[services.llm.env]
 # CUDA_VISIBLE_DEVICES = "0"
 VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS = "1"
 
-[services.main.args]
+[services.llm.args]
 enable_prefix_caching = true
 max_model_len = 148928
 enable_auto_tool_choice = true
@@ -50,10 +48,21 @@ kv_cache_dtype = "fp8_e4m3"
 
 # structured_outputs_config = "{\"backend\":\"auto\"}"
 
-[services.main.assets]
+[services.llm.assets]
 
-[stack.memory]
-provider = "hindsight"
+[services.memory]
+engine = "hindsight"
 host = "127.0.0.1"
 port = 8888
 data_dir = "${HINDSIGHT_DATA_ROOT}"
+llm_service = "llm"
+
+[services.memory.env]
+HINDSIGHT_API_EMBEDDINGS_PROVIDER = "local"                                                                                          
+HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU = "true"                                                                                    
+                                                                                                                                    
+HINDSIGHT_API_RERANKER_PROVIDER = "local"                                                                                            
+HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU = "true"                                                                                      
+HINDSIGHT_API_RERANKER_LOCAL_BUCKET_BATCHING = "true"                                                                                
+                                                                                                                                    
+HINDSIGHT_API_LAZY_RERANKER = "true"  

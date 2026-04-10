@@ -86,7 +86,7 @@ def _stack_payload(stack_name: str, root: Path, include_archive: bool = True) ->
                 "env": service.env,
                 "args": service.args,
                 "extra_args": service.extra_args,
-                "assets": service.assets.values,
+                "assets": (service.assets.values if service.assets is not None else {}),
                 "loras": [
                     {
                         "name": lora.name,
@@ -94,22 +94,14 @@ def _stack_payload(stack_name: str, root: Path, include_archive: bool = True) ->
                         "base_model": lora.base_model,
                         "enabled": lora.enabled,
                     }
-                    for lora in service.loras
+                    for lora in (service.loras or [])
                 ],
+                "data_dir": service.data_dir,
+                "llm_service": service.llm_service,
                 "notes": service.notes,
             }
             for name, service in stack.services.items()
         },
-        "memory": (
-            {
-                "provider": stack.memory.provider,
-                "host": stack.memory.host,
-                "port": stack.memory.port,
-                "data_dir": stack.memory.data_dir,
-            }
-            if stack.memory is not None
-            else None
-        ),
     }
 
 
@@ -139,7 +131,11 @@ def _print_render(stack_name: str, root: Path, as_json: bool) -> int:
         "services": [
             {
                 "name": service.service,
+                "engine": service.engine,
                 "port": service.port,
+                "host": service.host,
+                "managed": service.managed,
+                "waits_for": service.waits_for,
                 "command": service.command,
                 "env": {
                     key: service.env[key]
@@ -148,26 +144,13 @@ def _print_render(stack_name: str, root: Path, as_json: bool) -> int:
             }
             for service in plan.services
         ],
-        "memory": (
-            {
-                "name": plan.memory.service,
-                "port": plan.memory.port,
-                "host": plan.memory.host,
-                "managed": plan.memory.managed,
-                "command": plan.memory.command,
-            }
-            if plan.memory is not None
-            else None
-        ),
     }
     if as_json:
         print(json.dumps(payload, indent=2))
     else:
         for service in plan.services:
-            print(f"[{service.service}] {service.shell_command()}")
-        if plan.memory is not None:
-            prefix = "(reuse) " if not plan.memory.managed else ""
-            print(f"[{plan.memory.service}] {prefix}{plan.memory.shell_command()}")
+            prefix = "(reuse) " if not service.managed else ""
+            print(f"[{service.service}] {prefix}{service.shell_command()}")
     return 0
 
 

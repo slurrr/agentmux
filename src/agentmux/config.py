@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 STACK_ROOT = Path("mux")
-TRACKS = ("core", "lab", "archive")
+TRACKS = ("core", "lab", "archive", "examples")
 ENV_PATTERN = re.compile(
     r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<bare>[A-Za-z_][A-Za-z0-9_]*))"
 )
@@ -34,24 +34,18 @@ class AssetSpec:
 class ServiceSpec:
     name: str
     engine: str
-    model: str
     host: str
     port: int
-    served_model_name: str | None
     env: dict[str, str]
-    args: dict[str, FlagValue]
-    extra_args: list[str]
-    loras: list[LoraSpec]
-    assets: AssetSpec
     notes: str | None
-
-
-@dataclass(frozen=True)
-class MemorySpec:
-    provider: str
-    host: str
-    port: int
-    data_dir: str
+    model: str | None = None
+    served_model_name: str | None = None
+    args: dict[str, FlagValue] | None = None
+    extra_args: list[str] | None = None
+    loras: list[LoraSpec] | None = None
+    assets: AssetSpec | None = None
+    data_dir: str | None = None
+    llm_service: str | None = None
 
 
 @dataclass(frozen=True)
@@ -63,7 +57,6 @@ class StackSpec:
     notes: str | None
     env: dict[str, str]
     services: dict[str, ServiceSpec]
-    memory: MemorySpec | None
 
 
 def _load_toml(path: Path) -> dict[str, object]:
@@ -192,25 +185,137 @@ def _merge_table_dict(
     return merged
 
 
-def _merge_service(defaults: dict[str, object], service: dict[str, object]) -> dict[str, object]:
-    merged = dict(defaults)
-    merged.update(service)
-    merged["env"] = _merge_table_dict(defaults, service, "env", "defaults.env", "services.<name>.env")
-    merged["args"] = _merge_table_dict(
-        defaults,
-        service,
+def _get_service_host(raw: dict[str, object], defaults: dict[str, object], name: str) -> str:
+    host = raw.get("host", defaults.get("host", "0.0.0.0"))
+    if not isinstance(host, str) or not host:
+        raise ValueError(f"services.{name}.host must be a non-empty string")
+    return host
+
+
+def _get_service_port(raw: dict[str, object], name: str) -> int:
+    port = raw.get("port")
+    if not isinstance(port, int):
+        raise ValueError(f"services.{name}.port must be an integer")
+    return port
+
+
+def _get_service_notes(raw: dict[str, object], name: str) -> str | None:
+    notes = raw.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        raise ValueError(f"services.{name}.notes must be a string")
+    return notes
+
+
+def _service_from_vllm(
+    name: str,
+    raw: dict[str, object],
+    defaults: dict[str, object],
+) -> ServiceSpec:
+    allowed_keys = {
+        "engine",
+        "model",
+        "host",
+        "port",
+        "served_model_name",
+        "env",
         "args",
-        "defaults.args",
-        "services.<name>.args",
-    )
-    merged["assets"] = _merge_table_dict(
-        defaults,
-        service,
+        "extra_args",
+        "loras",
         "assets",
-        "defaults.assets",
-        "services.<name>.assets",
+        "notes",
+    }
+    unknown = sorted(set(raw.keys()) - allowed_keys)
+    if unknown:
+        names = ", ".join(unknown)
+        raise ValueError(f"services.{name} contains unsupported field(s) for engine='vllm': {names}")
+
+    model = raw.get("model")
+    served_model_name = raw.get("served_model_name")
+
+    if not isinstance(model, str) or not model:
+        raise ValueError(f"services.{name}.model must be a non-empty string")
+    if served_model_name is not None and not isinstance(served_model_name, str):
+        raise ValueError(f"services.{name}.served_model_name must be a string")
+
+    return ServiceSpec(
+        name=name,
+        engine="vllm",
+        host=_get_service_host(raw, defaults, name),
+        port=_get_service_port(raw, name),
+        env=_as_str_dict(
+            _merge_table_dict(defaults, raw, "env", "defaults.env", f"services.{name}.env"),
+            f"services.{name}.env",
+        ),
+        notes=_get_service_notes(raw, name),
+        model=_expand_env(model, f"services.{name}.model"),
+        served_model_name=(
+            _expand_env(served_model_name, f"services.{name}.served_model_name")
+            if served_model_name is not None
+            else None
+        ),
+        args=_as_flag_map(
+            _merge_table_dict(defaults, raw, "args", "defaults.args", f"services.{name}.args"),
+            f"services.{name}.args",
+        ),
+        extra_args=_as_str_list(raw.get("extra_args"), f"services.{name}.extra_args"),
+        loras=_as_loras(raw.get("loras"), f"services.{name}.loras"),
+        assets=_as_assets(
+            _merge_table_dict(
+                defaults,
+                raw,
+                "assets",
+                "defaults.assets",
+                f"services.{name}.assets",
+            ),
+            f"services.{name}.assets",
+        ),
     )
-    return merged
+
+
+def _service_from_hindsight(
+    name: str,
+    raw: dict[str, object],
+    defaults: dict[str, object],
+) -> ServiceSpec:
+    allowed_keys = {
+        "engine",
+        "host",
+        "port",
+        "data_dir",
+        "llm_service",
+        "env",
+        "notes",
+    }
+    unknown = sorted(set(raw.keys()) - allowed_keys)
+    if unknown:
+        names = ", ".join(unknown)
+        raise ValueError(
+            f"services.{name} contains unsupported field(s) for engine='hindsight': {names}"
+        )
+
+    data_dir = raw.get("data_dir", "~/data/hindsight")
+    llm_service = raw.get("llm_service")
+
+    if not isinstance(data_dir, str) or not data_dir:
+        raise ValueError(f"services.{name}.data_dir must be a non-empty string")
+    if not isinstance(llm_service, str) or not llm_service:
+        raise ValueError(f"services.{name}.llm_service must be a non-empty string")
+
+    expanded_data_dir = _expand_env(data_dir, f"services.{name}.data_dir")
+
+    return ServiceSpec(
+        name=name,
+        engine="hindsight",
+        host=_get_service_host(raw, defaults, name),
+        port=_get_service_port(raw, name),
+        env=_as_str_dict(
+            _merge_table_dict(defaults, raw, "env", "defaults.env", f"services.{name}.env"),
+            f"services.{name}.env",
+        ),
+        notes=_get_service_notes(raw, name),
+        data_dir=str(Path(expanded_data_dir).expanduser()),
+        llm_service=llm_service,
+    )
 
 
 def _service_from_data(
@@ -218,99 +323,14 @@ def _service_from_data(
     raw: dict[str, object],
     defaults: dict[str, object],
 ) -> ServiceSpec:
-    merged = _merge_service(defaults, raw)
-
-    engine = merged.get("engine", "vllm")
-    model = merged.get("model")
-    host = merged.get("host", "0.0.0.0")
-    port = merged.get("port")
-    served_model_name = merged.get("served_model_name")
-    notes = merged.get("notes")
-
+    engine = raw.get("engine", "vllm")
     if not isinstance(engine, str) or not engine:
         raise ValueError(f"services.{name}.engine must be a non-empty string")
-    if not isinstance(model, str) or not model:
-        raise ValueError(f"services.{name}.model must be a non-empty string")
-    if not isinstance(host, str) or not host:
-        raise ValueError(f"services.{name}.host must be a non-empty string")
-    if not isinstance(port, int):
-        raise ValueError(f"services.{name}.port must be an integer")
-    if served_model_name is not None and not isinstance(served_model_name, str):
-        raise ValueError(f"services.{name}.served_model_name must be a string")
-    if notes is not None and not isinstance(notes, str):
-        raise ValueError(f"services.{name}.notes must be a string")
-
-    return ServiceSpec(
-        name=name,
-        engine=engine,
-        model=_expand_env(model, f"services.{name}.model"),
-        host=host,
-        port=port,
-        served_model_name=(
-            _expand_env(served_model_name, f"services.{name}.served_model_name")
-            if served_model_name is not None
-            else None
-        ),
-        env=_as_str_dict(merged.get("env"), f"services.{name}.env"),
-        args=_as_flag_map(merged.get("args"), f"services.{name}.args"),
-        extra_args=_as_str_list(merged.get("extra_args"), f"services.{name}.extra_args"),
-        loras=_as_loras(merged.get("loras"), f"services.{name}.loras"),
-        assets=_as_assets(merged.get("assets"), f"services.{name}.assets"),
-        notes=notes,
-    )
-
-
-def _memory_from_stack(value: object) -> MemorySpec | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise ValueError("stack.memory must be a table")
-
-    if "provider" not in value:
-        raise ValueError("stack.memory.provider is required when stack.memory is set")
-    provider = value.get("provider")
-    if not isinstance(provider, str) or not provider:
-        raise ValueError("stack.memory.provider must be a non-empty string")
-    if provider != "hindsight":
-        raise ValueError("stack.memory.provider must be 'hindsight' in v1")
-
-    disallowed_override_keys = {
-        "llm_provider",
-        "llm_model",
-        "llm_api_key",
-        "llm_base_url",
-    }
-    attempted = sorted(disallowed_override_keys & set(value.keys()))
-    if attempted:
-        names = ", ".join(attempted)
-        raise ValueError(
-            f"stack.memory does not allow overriding derived LLM fields: {names}"
-        )
-
-    allowed_keys = {"provider", "host", "port", "data_dir"}
-    unknown = sorted(set(value.keys()) - allowed_keys)
-    if unknown:
-        names = ", ".join(unknown)
-        raise ValueError(f"stack.memory contains unsupported field(s): {names}")
-
-    host = value.get("host", "127.0.0.1")
-    port = value.get("port", 8888)
-    data_dir = value.get("data_dir", "~/data/hindsight")
-
-    if not isinstance(host, str) or not host:
-        raise ValueError("stack.memory.host must be a non-empty string")
-    if not isinstance(port, int):
-        raise ValueError("stack.memory.port must be an integer")
-    if not isinstance(data_dir, str) or not data_dir:
-        raise ValueError("stack.memory.data_dir must be a non-empty string")
-
-    expanded_data_dir = _expand_env(data_dir, "stack.memory.data_dir")
-    return MemorySpec(
-        provider=provider,
-        host=host,
-        port=port,
-        data_dir=str(Path(expanded_data_dir).expanduser()),
-    )
+    if engine == "vllm":
+        return _service_from_vllm(name, raw, defaults)
+    if engine == "hindsight":
+        return _service_from_hindsight(name, raw, defaults)
+    raise ValueError(f"Unsupported engine in v1: {engine}")
 
 
 def load_stack(path: Path) -> StackSpec:
@@ -332,12 +352,17 @@ def load_stack(path: Path) -> StackSpec:
     if not services:
         raise ValueError("At least one service is required")
 
+    allowed_stack_keys = {"name", "track", "primary_service", "notes"}
+    unknown_stack_keys = sorted(set(stack.keys()) - allowed_stack_keys)
+    if unknown_stack_keys:
+        names = ", ".join(unknown_stack_keys)
+        raise ValueError(f"[stack] contains unsupported field(s): {names}")
+
     name = stack.get("name", path.stem)
     inferred_track = path.parent.name
     track = stack.get("track", inferred_track)
     primary_service = stack.get("primary_service")
     notes = stack.get("notes")
-    memory = _memory_from_stack(stack.get("memory"))
 
     if not isinstance(name, str) or not name:
         raise ValueError("stack.name must be a non-empty string")
@@ -366,6 +391,20 @@ def load_stack(path: Path) -> StackSpec:
     if len(parsed_services) != len(services):
         raise ValueError("Each [services.<name>] entry must be a table")
 
+    for service_name, service in parsed_services.items():
+        if service.engine != "hindsight":
+            continue
+        llm_service = service.llm_service
+        if llm_service not in parsed_services:
+            raise ValueError(
+                f"services.{service_name}.llm_service must reference an existing service"
+            )
+        target = parsed_services[llm_service]
+        if target.engine != "vllm":
+            raise ValueError(
+                f"services.{service_name}.llm_service must reference a vllm service in v1"
+            )
+
     return StackSpec(
         name=name,
         track=track,
@@ -374,7 +413,6 @@ def load_stack(path: Path) -> StackSpec:
         notes=notes,
         env=stack_env,
         services=parsed_services,
-        memory=memory,
     )
 
 

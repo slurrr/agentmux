@@ -31,6 +31,18 @@ def test_build_stack_plan_handles_multi_service_stack() -> None:
     assert "--disable-log-requests" in router_default.command
 
 
+@patch("agentmux.runner._port_is_in_use", return_value=False)
+def test_build_stack_plan_handles_hindsight_service(mock_port_in_use) -> None:
+    plan = build_stack_plan("example_hindsight_memory")
+    services = {service.service: service for service in plan.services}
+    memory = services["memory"]
+    assert memory.engine == "hindsight"
+    assert memory.command == ["uv", "run", "python", "scripts/hindsight_dev.py"]
+    assert memory.waits_for == "main"
+    assert memory.env["HINDSIGHT_LLM_PROVIDER"] == "openai"
+    assert memory.env["HINDSIGHT_LLM_BASE_URL"] == "http://127.0.0.1:8000/v1"
+
+
 def test_build_stack_plan_assets_override_same_name_args(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     mux_root = tmp_path / "mux" / "lab"

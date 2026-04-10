@@ -5,7 +5,7 @@ This directory holds stack manifests for `agentmux`.
 ## Layout
 - `core/`: known-good stacks you actually use
 - `lab/`: active experiments and tuning work
-- `archive/`: reference material, retired stacks, and shapes you may want later
+- `examples/`: reference material and copyable example stacks
 
 ## Manifest Philosophy
 Normal manifests should stay close to real operator intent:
@@ -121,7 +121,7 @@ Behavior:
 - `generation_config = "vllm"` skips generation config and uses vLLM's neutral defaults.
 - `generation_config = "/path/to/dir"` loads a `generation_config.json` from that directory.
 
-Reference example: `mux/archive/example_generation_config.json` shows the shape of the file. To
+Reference example: `mux/examples/example_generation_config.json` shows the shape of the file. To
 use it with vLLM, copy it into a directory as `generation_config.json` and point
 `generation_config` at that directory.
 
@@ -171,22 +171,23 @@ base_model = "Qwen2.5-7B-Instruct"
 enabled = false
 ```
 
-### Stack memory sidecar (`[stack.memory]`)
-A stack can optionally launch Hindsight as a local memory sidecar.
+### Hindsight as a service
+A stack can launch Hindsight as a normal named service.
 
 ```toml
-[stack.memory]
-provider = "hindsight"
+[services.memory]
+engine = "hindsight"
 host = "127.0.0.1"
 port = 8888
 data_dir = "~/data/hindsight"
+llm_service = "main"
 ```
 
 Behavior:
-- `provider = "hindsight"` enables memory sidecar launch.
-- If omitted, no Hindsight process is launched.
-- Hindsight LLM settings are derived from the stack primary service.
-- `llm_provider`, `llm_model`, `llm_api_key`, and `llm_base_url` are not allowed in `[stack.memory]`.
+- `engine = "hindsight"` enables Hindsight launch for that service.
+- `llm_service` points at the in-stack vLLM service Hindsight should use for retain/recall/reflect calls.
+- If no Hindsight service is declared, no Hindsight process is launched.
+- Hindsight launch settings are service-shaped, not sidecar-shaped.
 
 ### Multi-service stacks
 A stack can contain more than one service. That is useful for future team-style topologies even if you usually run one primary service today.
@@ -211,6 +212,6 @@ treated as the stack default.
 
 ## Guidance
 - Copy from `core/` or `lab/` when you want a real starting point.
-- Use `archive/` for reference shapes and retired ideas.
+- Use `examples/` for reference shapes and copyable examples.
 - Keep examples realistic.
 - Use advanced features only when you actually need them.

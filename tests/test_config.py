@@ -13,7 +13,7 @@ def test_list_stacks_finds_tracks() -> None:
 
 def test_resolve_stack_parses_services() -> None:
     stack = resolve_stack("example_vllm_recipes")
-    assert stack.track == "archive"
+    assert stack.track == "examples"
     assert stack.primary_service == "generalist"
     assert stack.services["generalist"].args["attention_backend"] == "FLASH_ATTN"
     assert stack.services["generalist"].args["enable_prefix_caching"] is True
@@ -24,6 +24,14 @@ def test_resolve_stack_supports_multi_service_shape() -> None:
     assert len(stack.services) == 2
     assert stack.primary_service == "router_default"
     assert stack.services["coder"].assets.values["chat_template"] == "assets/chat_templates/coder.jinja"
+
+
+def test_resolve_stack_supports_hindsight_service_shape() -> None:
+    stack = resolve_stack("example_hindsight_memory")
+    memory = stack.services["memory"]
+    assert memory.engine == "hindsight"
+    assert memory.data_dir == str(Path("~/data/hindsight").expanduser())
+    assert memory.llm_service == "main"
 
 
 def test_resolve_stack_expands_env_backed_model_paths(tmp_path: Path, monkeypatch) -> None:

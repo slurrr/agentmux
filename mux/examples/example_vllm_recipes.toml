@@ -1,6 +1,6 @@
 [stack]
 name = "example_vllm_recipes"
-track = "archive"
+track = "examples"
 primary_service = "generalist"
 notes = "Reference-only example showing a robust vLLM recipe surface with multiple services, defaults, LoRAs, assets, and generic args."
 
