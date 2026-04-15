@@ -1,49 +1,46 @@
 # Current Goal
-Refactor Hindsight from special `[stack.memory]` sidecar shape into a normal service-shaped engine in `agentmux`.
+Refactor Hindsight into a normal service shape, stabilize local stack behavior, and keep enough session context to resume quickly.
 
 # Current State
-- Added refactor spec: `docs/specs/005-hindsight-as-service.md`.
-- Added implementation plan: `docs/specs/006-hindsight-service-refactor-plan.md`.
-- `src/agentmux/config.py` no longer has `MemorySpec` / `StackSpec.memory`.
-- Service parsing is now engine-aware for:
-  - `engine = "vllm"`
-  - `engine = "hindsight"`
-- `[stack]` now rejects unsupported fields, so `[stack.memory]` is no longer part of the active manifest contract.
-- `src/agentmux/runner.py` now uses one `ServiceLaunchPlan` list; no separate memory launch plan remains.
-- Hindsight launch/reuse logic now lives in the `engine = "hindsight"` service path with `llm_service` dependency wiring.
-- `mux/core/memory_omnicoder_9b.toml` was converted to:
-  - `[services.memory]`
-  - `engine = "hindsight"`
-  - `llm_service = "main"`
-- `mux/examples/example_hindsight_memory.toml` was converted to service-shaped Hindsight.
-- Example track names were aligned to the real `mux/examples/` directory.
-- Updated docs/tests for the new service shape.
-- Targeted checks passing:
-  - `pytest tests/test_config.py tests/test_runner.py tests/test_main.py`
-  - `uv run agentmux render pi_ghosty`
+- Hindsight was refactored from `[stack.memory]` into `[services.memory]` with `engine = "hindsight"`.
+- Added specs:
+  - `docs/specs/005-hindsight-as-service.md`
+  - `docs/specs/006-hindsight-service-refactor-plan.md`
+- `src/agentmux/config.py` now parses engine-aware services and no longer uses `MemorySpec`.
+- `src/agentmux/runner.py` now plans one flat service list; Hindsight launch/reuse logic lives in the hindsight service path.
+- `mux/core/memory_omnicoder_9b.toml` was converted to service-shaped memory, then the whole `[services.memory]` block was commented out temporarily for no-memory testing.
+- Hindsight backend review against local docs concluded:
+  - current CPU-first local setup is basically fine
+  - missions are better treated as bank/app config than backend infra env
+  - do not raise `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`; fix recall query construction client-side
+  - explicit provider pins and optional reranker bucket batching are the only backend tweaks really worth considering
+- Latest investigated failure was **not** a Hindsight issue.
+- Latest `pi-vera` failure log:
+  - `/home/poop/runs/agentmux/logs/20260414-192655-pi-vera-llm.log`
+  - failure is vLLM startup for Gemma4 with fp8 KV cache + `calculate_kv_scales = true`
+  - key error: `AssertionError: A non 1.0 q_scale is not currently supported.`
+  - log also shows Gemma4 forcing `TRITON_ATTN`, which is part of the failing backend path
+- Conclusion for that failure:
+  - not OOM / not generic KV cache exhaustion
+  - likely fix is to remove `calculate_kv_scales = true`
+  - if still needed, next fallback is removing `kv_cache_dtype = "fp8"` for that stack/model
 
 # Decisions
-- Do not keep `[stack.memory]` compatibility; migrate the one real stack instead.
-- Keep the refactor minimal: engine-aware services, not a generic engine plugin system.
-- Hindsight should derive its LLM backend from explicit `llm_service`, not implicitly from `primary_service`.
+- Do not keep `[stack.memory]` compatibility; migrate manifests to service-shaped memory directly.
+- Treat Hindsight as an optional service; clients should decide when to call it.
+- Keep backend Hindsight config minimal and infra-focused; memory semantics like missions belong closer to app/bank config.
+- Keep recall query max tokens at the default `500`; oversized recall queries should be fixed client-side.
 
 # Open Problems
-- Some historical docs still describe the old sidecar shape:
+- `agentmux up` currently no longer mirrors/follows primary vLLM startup logs for single-service stacks unless another service depends on them. This was identified but not fixed in this session.
+- Historical docs still mention the old Hindsight sidecar shape:
   - `docs/specs/004-hindsight-embedded-server.md`
   - `docs/decisions/0005-hindsight-local-memory-service.md`
   - `docs/decisions/0006-memory-sidecar-shape-is-transitional.md`
-- `smoke.py` still only probes `primary_service`, which is acceptable for now but still vLLM-primary in workflow.
-- Full test suite has not been run yet; only targeted tests were run.
+- `pi-vera` mux still needs the actual manifest fix for the Gemma4 fp8/q_scale failure.
 
 # Resume Instructions
-1. Review and clean up stale sidecar language in:
-   - `docs/specs/004-hindsight-embedded-server.md`
-   - `docs/decisions/0005-hindsight-local-memory-service.md`
-   - `docs/decisions/0006-memory-sidecar-shape-is-transitional.md`
-2. Run broader validation from repo root:
-   - `pytest`
-3. If behavior checks are needed, inspect:
-   - `src/agentmux/config.py`
-   - `src/agentmux/runner.py`
-   - `mux/core/memory_omnicoder_9b.toml`
-4. If continuing implementation, next likely follow-up is making CLI/docs output a bit more engine-aware without adding abstraction.
+1. For the Gemma4 startup failure, inspect and edit the `pi-vera` mux/service args to remove `calculate_kv_scales = true` first.
+2. Re-test startup and, if it still fails, remove `kv_cache_dtype = "fp8"` for that model.
+3. If returning to Hindsight backend tuning, keep changes limited to backend-owned knobs only (provider pins, optional reranker batching), and leave missions/query policy to app or bank config.
+4. If resuming `agentmux` UX work, the next code issue is restoring startup log following/readiness handling for single-service stacks.
