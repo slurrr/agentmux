@@ -50,19 +50,20 @@ kv_cache_dtype = "fp8_e4m3"
 
 [services.llm.assets]
 
-# [services.memory]
-# engine = "hindsight"
-# host = "127.0.0.1"
-# port = 8888
-# data_dir = "${HINDSIGHT_DATA_ROOT}"
-# llm_service = "llm"
-#
-# [services.memory.env]
-# HINDSIGHT_API_EMBEDDINGS_PROVIDER = "local"
-# HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU = "true"
-#
-# HINDSIGHT_API_RERANKER_PROVIDER = "local"
-# HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU = "true"
-# HINDSIGHT_API_RERANKER_LOCAL_BUCKET_BATCHING = "true"
-#
-# HINDSIGHT_API_LAZY_RERANKER = "true"
+[services.memory]
+engine = "hindsight"
+host = "127.0.0.1"
+port = 8888
+data_dir = "${HINDSIGHT_DATA_ROOT}"
+llm_service = "llm"
+# retain_extraction_mode: "verbose" 
+
+[services.memory.env]
+HINDSIGHT_API_EMBEDDINGS_PROVIDER = "local"
+HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU = "true"
+
+HINDSIGHT_API_RERANKER_PROVIDER = "local"
+HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU = "true"
+HINDSIGHT_API_RERANKER_LOCAL_BUCKET_BATCHING = "true"
+
+HINDSIGHT_API_LAZY_RERANKER = "true"

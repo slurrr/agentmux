@@ -26,6 +26,11 @@ def test_resolve_stack_supports_multi_service_shape() -> None:
     assert stack.services["coder"].assets.values["chat_template"] == "assets/chat_templates/coder.jinja"
 
 
+def test_resolve_stack_loads_system_prompt_asset() -> None:
+    stack = resolve_stack("example_vllm_recipes")
+    assert stack.services["generalist"].assets.values["system_prompt"] == "assets/prompts/generalist_system.md"
+
+
 def test_resolve_stack_supports_hindsight_service_shape() -> None:
     stack = resolve_stack("example_hindsight_memory")
     memory = stack.services["memory"]

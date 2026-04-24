@@ -1,5 +1,5 @@
 [stack]
-name = "pi-vera"
+name = "alex"
 track = "lab"
 primary_service = "llm"
 notes = "Tool-capable gemma4-E4B-it for agentic workflows in pi-ghosty with memory"
@@ -50,19 +50,4 @@ generation_config = "auto"
 
 [services.llm.assets]
 
-[services.memory]
-engine = "hindsight"
-host = "127.0.0.1"
-port = 8888
-data_dir = "${HINDSIGHT_DATA_ROOT}"
-llm_service = "llm"
-
-[services.memory.env]
-HINDSIGHT_API_EMBEDDINGS_PROVIDER = "local"
-HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU = "true"
-
-HINDSIGHT_API_RERANKER_PROVIDER = "local"
-HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU = "true"
-HINDSIGHT_API_RERANKER_LOCAL_BUCKET_BATCHING = "true"
-
-HINDSIGHT_API_LAZY_RERANKER = "true"
+# [services.memory]
