@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import signal
 import subprocess
@@ -28,6 +29,14 @@ def _build_hindsight_env(database_url: str) -> dict[str, str]:
     return env
 
 
+def _pg0_instance_name(data_dir: Path) -> str:
+    configured = os.environ.get("HINDSIGHT_PG0_INSTANCE_NAME")
+    if configured:
+        return configured
+    digest = hashlib.sha1(str(data_dir.resolve()).encode("utf-8")).hexdigest()[:12]
+    return f"agentmux-hindsight-{digest}"
+
+
 def _start_pg0(data_dir: Path):
     try:
         from pg0 import Pg0  # type: ignore
@@ -35,7 +44,7 @@ def _start_pg0(data_dir: Path):
         raise RuntimeError("pg0 package is required for explicit hindsight data_dir persistence") from exc
 
     data_dir.mkdir(parents=True, exist_ok=True)
-    instance_name = "agentmux-hindsight"
+    instance_name = _pg0_instance_name(data_dir)
     pg = Pg0(
         name=instance_name,
         username="hindsight",
@@ -47,6 +56,13 @@ def _start_pg0(data_dir: Path):
     return pg, info.uri
 
 
+def _hindsight_api_executable() -> str:
+    runtime_bin_dir = os.environ.get("HINDSIGHT_RUNTIME_BIN_DIR")
+    if runtime_bin_dir:
+        return str(Path(runtime_bin_dir).expanduser() / "hindsight-api")
+    return str(Path(sys.prefix) / "bin" / "hindsight-api")
+
+
 def main() -> int:
     data_dir = Path(_env("HINDSIGHT_DATA_DIR", "~/data/hindsight")).expanduser()
     pg, database_url = _start_pg0(data_dir)
@@ -54,13 +70,15 @@ def main() -> int:
     env = _build_hindsight_env(database_url)
     host = env["HINDSIGHT_API_HOST"]
     port = env["HINDSIGHT_API_PORT"]
+    hindsight_api = _hindsight_api_executable()
 
     print(f"hindsight persistence data_dir={data_dir}", flush=True)
     print(f"hindsight database_url={database_url}", flush=True)
+    print(f"hindsight executable={hindsight_api}", flush=True)
     print(f"hindsight listening on http://{host}:{port}", flush=True)
 
     process = subprocess.Popen(
-        ["uv", "run", "hindsight-api", "--host", host, "--port", port, "--no-access-log"],
+        [hindsight_api, "--host", host, "--port", port, "--no-access-log"],
         env=env,
         start_new_session=True,
     )

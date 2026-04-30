@@ -38,6 +38,7 @@ class ServiceSpec:
     port: int
     env: dict[str, str]
     notes: str | None
+    runtime_bin_dir: str | None = None
     model: str | None = None
     served_model_name: str | None = None
     args: dict[str, FlagValue] | None = None
@@ -223,6 +224,7 @@ def _service_from_vllm(
         "loras",
         "assets",
         "notes",
+        "runtime_bin_dir",
     }
     unknown = sorted(set(raw.keys()) - allowed_keys)
     if unknown:
@@ -237,6 +239,10 @@ def _service_from_vllm(
     if served_model_name is not None and not isinstance(served_model_name, str):
         raise ValueError(f"services.{name}.served_model_name must be a string")
 
+    runtime_bin_dir = raw.get("runtime_bin_dir")
+    if runtime_bin_dir is not None and (not isinstance(runtime_bin_dir, str) or not runtime_bin_dir):
+        raise ValueError(f"services.{name}.runtime_bin_dir must be a non-empty string")
+
     return ServiceSpec(
         name=name,
         engine="vllm",
@@ -247,6 +253,11 @@ def _service_from_vllm(
             f"services.{name}.env",
         ),
         notes=_get_service_notes(raw, name),
+        runtime_bin_dir=(
+            _expand_env(runtime_bin_dir, f"services.{name}.runtime_bin_dir")
+            if runtime_bin_dir is not None
+            else None
+        ),
         model=_expand_env(model, f"services.{name}.model"),
         served_model_name=(
             _expand_env(served_model_name, f"services.{name}.served_model_name")
@@ -285,6 +296,7 @@ def _service_from_hindsight(
         "llm_service",
         "env",
         "notes",
+        "runtime_bin_dir",
     }
     unknown = sorted(set(raw.keys()) - allowed_keys)
     if unknown:
@@ -295,11 +307,14 @@ def _service_from_hindsight(
 
     data_dir = raw.get("data_dir", "~/data/hindsight")
     llm_service = raw.get("llm_service")
+    runtime_bin_dir = raw.get("runtime_bin_dir")
 
     if not isinstance(data_dir, str) or not data_dir:
         raise ValueError(f"services.{name}.data_dir must be a non-empty string")
     if not isinstance(llm_service, str) or not llm_service:
         raise ValueError(f"services.{name}.llm_service must be a non-empty string")
+    if runtime_bin_dir is not None and (not isinstance(runtime_bin_dir, str) or not runtime_bin_dir):
+        raise ValueError(f"services.{name}.runtime_bin_dir must be a non-empty string")
 
     expanded_data_dir = _expand_env(data_dir, f"services.{name}.data_dir")
 
@@ -313,6 +328,11 @@ def _service_from_hindsight(
             f"services.{name}.env",
         ),
         notes=_get_service_notes(raw, name),
+        runtime_bin_dir=(
+            _expand_env(runtime_bin_dir, f"services.{name}.runtime_bin_dir")
+            if runtime_bin_dir is not None
+            else None
+        ),
         data_dir=str(Path(expanded_data_dir).expanduser()),
         llm_service=llm_service,
     )

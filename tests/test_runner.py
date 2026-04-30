@@ -36,11 +36,45 @@ def test_build_stack_plan_handles_hindsight_service(mock_port_in_use) -> None:
     plan = build_stack_plan("example_hindsight_memory")
     services = {service.service: service for service in plan.services}
     memory = services["memory"]
+    runtime_python = str(Path(__file__).resolve().parents[1] / ".venv-hindsight" / "bin" / "python")
+    runtime_bin_dir = str(Path(__file__).resolve().parents[1] / ".venv-hindsight" / "bin")
     assert memory.engine == "hindsight"
-    assert memory.command == ["uv", "run", "python", "scripts/hindsight_dev.py"]
+    assert memory.command == [runtime_python, "scripts/hindsight_dev.py"]
     assert memory.waits_for == "main"
     assert memory.env["HINDSIGHT_LLM_PROVIDER"] == "openai"
     assert memory.env["HINDSIGHT_LLM_BASE_URL"] == "http://127.0.0.1:8000/v1"
+    assert memory.env["HINDSIGHT_RUNTIME_BIN_DIR"] == runtime_bin_dir
+
+
+def test_build_stack_plan_uses_runtime_bin_dir_for_vllm(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    mux_root = tmp_path / "mux" / "lab"
+    mux_root.mkdir(parents=True)
+    (tmp_path / ".env").write_text("MODEL_ROOT=/models\n", encoding="utf-8")
+    (mux_root / "runtime_vllm.toml").write_text(
+        """
+[stack]
+name = "runtime_vllm"
+track = "lab"
+primary_service = "main"
+
+[services.main]
+engine = "vllm"
+runtime_bin_dir = ".venv-vllm/bin"
+model = "${MODEL_ROOT}/Qwen/Test"
+port = 8000
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = build_stack_plan("runtime_vllm", root=tmp_path / "mux")
+    runtime_vllm = str(Path(__file__).resolve().parents[1] / ".venv-vllm" / "bin" / "vllm")
+    command = plan.services[0].command
+    assert command[:2] == [runtime_vllm, "serve"]
+    assert "${MODEL_ROOT}" not in command[2]
+    assert command[2].endswith("/Qwen/Test")
+
 
 
 def test_build_stack_plan_assets_override_same_name_args(tmp_path: Path, monkeypatch) -> None:

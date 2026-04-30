@@ -15,6 +15,7 @@ tensor_parallel_size = 1
 
 [services.main]
 engine = "vllm"
+runtime_bin_dir = ".venv-vllm/bin"
 model = "${QUANT_ROOT}/omnicoder-9b/fp8/runs/20260323T173415Z/OmniCoder3.5-9B-FP8-Dynamic"
 port = 8002
 served_model_name = "OmniCoder-9B"

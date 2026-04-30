@@ -17,6 +17,7 @@ tensor_parallel_size = 1
 
 [services.llm]
 engine = "vllm"
+runtime_bin_dir = ".venv-vllm/bin"
 model = "${MODEL_ROOT}/hf-snapshots/gemma-4-e4b-it/current"
 port = 8002
 # host = "127.0.0.1"

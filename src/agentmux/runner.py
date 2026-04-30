@@ -62,6 +62,15 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _resolve_runtime_bin_dir(runtime_bin_dir: str | None) -> Path | None:
+    if runtime_bin_dir is None:
+        return None
+    path = Path(runtime_bin_dir).expanduser()
+    if not path.is_absolute():
+        path = _repo_root() / path
+    return path.resolve()
+
+
 def _venv_site_packages_dir() -> Path | None:
     lib_root = _repo_root() / ".venv" / "lib"
     if not lib_root.is_dir():
@@ -172,17 +181,29 @@ def _apply_assets(command: list[str], service: ServiceSpec) -> set[str]:
 def _build_vllm_command(service: ServiceSpec) -> list[str]:
     if service.model is None:
         raise ValueError(f"vllm service {service.name} is missing model")
-    command = [
-        "uv",
-        "run",
-        "vllm",
-        "serve",
-        service.model,
-        "--host",
-        service.host,
-        "--port",
-        str(service.port),
-    ]
+    runtime_bin_dir = _resolve_runtime_bin_dir(service.runtime_bin_dir)
+    if runtime_bin_dir is not None:
+        command = [
+            str(runtime_bin_dir / "vllm"),
+            "serve",
+            service.model,
+            "--host",
+            service.host,
+            "--port",
+            str(service.port),
+        ]
+    else:
+        command = [
+            "uv",
+            "run",
+            "vllm",
+            "serve",
+            service.model,
+            "--host",
+            service.host,
+            "--port",
+            str(service.port),
+        ]
     if service.served_model_name:
         command.extend(["--served-model-name", service.served_model_name])
     asset_keys = _apply_assets(command, service)
@@ -238,6 +259,8 @@ def _build_hindsight_plan(stack: StackSpec, service: ServiceSpec, env: dict[str,
     llm_model = target.served_model_name or target.model
     llm_base_url = _service_base_url(target.host, target.port)
 
+    runtime_bin_dir = _resolve_runtime_bin_dir(service.runtime_bin_dir)
+
     derived_env = dict(env)
     derived_env.update(
         {
@@ -250,6 +273,8 @@ def _build_hindsight_plan(stack: StackSpec, service: ServiceSpec, env: dict[str,
             "HINDSIGHT_LLM_BASE_URL": llm_base_url,
         }
     )
+    if runtime_bin_dir is not None:
+        derived_env["HINDSIGHT_RUNTIME_BIN_DIR"] = str(runtime_bin_dir)
 
     if _port_is_in_use(service.host, service.port):
         if _hindsight_healthcheck(service.host, service.port):
@@ -269,12 +294,16 @@ def _build_hindsight_plan(stack: StackSpec, service: ServiceSpec, env: dict[str,
             "but the port is already in use by another process"
         )
 
+    command = ["uv", "run", "python", "scripts/hindsight_dev.py"]
+    if runtime_bin_dir is not None:
+        command = [str(runtime_bin_dir / "python"), "scripts/hindsight_dev.py"]
+
     return ServiceLaunchPlan(
         stack=stack.name,
         service=service.name,
         engine=service.engine,
         env=derived_env,
-        command=["uv", "run", "python", "scripts/hindsight_dev.py"],
+        command=command,
         port=service.port,
         host=service.host,
         managed=True,

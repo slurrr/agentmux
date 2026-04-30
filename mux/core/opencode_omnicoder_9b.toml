@@ -15,6 +15,7 @@ tensor_parallel_size = 1
 
 [services.main]
 engine = "vllm"
+runtime_bin_dir = ".venv-vllm/bin"
 model = "${QUANT_ROOT}/omnicoder-9b/fp8/current"
 port = 8002
 # host = "127.0.0.1"

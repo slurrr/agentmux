@@ -1,4 +1,6 @@
 .venv/
+.venv-hindsight
+.venv-vllm
 __pycache__/
 *.py[cod]
 .env

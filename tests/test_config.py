@@ -35,6 +35,7 @@ def test_resolve_stack_supports_hindsight_service_shape() -> None:
     stack = resolve_stack("example_hindsight_memory")
     memory = stack.services["memory"]
     assert memory.engine == "hindsight"
+    assert memory.runtime_bin_dir == ".venv-hindsight/bin"
     assert memory.data_dir == str(Path("~/data/hindsight").expanduser())
     assert memory.llm_service == "main"
 
