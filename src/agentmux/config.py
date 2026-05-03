@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 STACK_ROOT = Path("mux")
-TRACKS = ("core", "lab", "archive", "examples")
+TRACKS = ("core", "lab", "bench", "archive", "examples")
 ENV_PATTERN = re.compile(
     r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<bare>[A-Za-z_][A-Za-z0-9_]*))"
 )

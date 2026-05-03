@@ -16,7 +16,7 @@ max_num_seqs = 10
 [services.llm]
 engine = "vllm"
 runtime_bin_dir = ".venv-vllm/bin"
-model = "${MODEL_ROOT}/hf-snapshots/qwen3.5-9b/current"
+model = "${MODEL_ROOT}/quants/llm-compressor-artifacts/qwen3.5-9b-fp8-block"
 port = 8002
 served_model_name = "qwen3.5-9b"
 # extra_args = ["--disable-log-requests"]

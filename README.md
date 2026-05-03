@@ -43,6 +43,7 @@ uv pip install vllm --torch-backend=auto
 ## Stack Layout
 - `mux/core/`: known-good muxes you actually use
 - `mux/lab/`: active experiments
+- `mux/bench/`: benchmark-only muxes kept consistent for fair comparisons
 - `mux/archive/`: reference-only shapes and retired ideas
 
 ## Common Commands

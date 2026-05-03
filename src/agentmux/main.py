@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 
 from agentmux import __version__
+from agentmux.bench import BenchmarkError, run_benchmark
+from agentmux.bench_report import read_result, render_detailed_report
 from agentmux.config import STACK_ROOT, list_stacks, resolve_stack
 from agentmux.runner import build_stack_plan, launch_stack
 from agentmux.runtime import (
@@ -63,6 +65,69 @@ def build_parser() -> argparse.ArgumentParser:
 
     history_parser = subparsers.add_parser("history", help="Show recent stack launch history")
     history_parser.add_argument("--limit", type=int, default=10, help="Number of history entries")
+
+    bench_parser = subparsers.add_parser("bench", help="Benchmark a stack")
+    bench_parser.add_argument("stack", help="Stack name")
+    bench_parser.add_argument(
+        "--launch",
+        action="store_true",
+        help="Launch the stack for this benchmark run, then benchmark it",
+    )
+    bench_parser.add_argument(
+        "--keep-running",
+        action="store_true",
+        help="With --launch, leave the launched stack running after the benchmark",
+    )
+
+    bench_show_parser = subparsers.add_parser(
+        "bench-show",
+        help="Show a benchmark result in a human-readable format",
+        description=(
+            "Show a saved benchmark result as a readable terminal report. "
+            "If RESULT is omitted, the latest benchmark JSON is used."
+        ),
+        epilog=(
+            "examples:\n"
+            "  agentmux bench-show\n"
+            "  agentmux bench-show qwen3_5-bench\n"
+            "  agentmux bench-show /path/to/result.json\n"
+            "  agentmux bench-show --failures-only\n"
+            "  agentmux bench-show --judge-disagrees\n"
+            "  agentmux bench-show --case bounded_structured_summary\n"
+            "  agentmux bench-show --compact\n"
+            "  agentmux bench-show picked --json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    bench_show_parser.add_argument(
+        "result",
+        nargs="?",
+        help="Benchmark result path or filename fragment; defaults to latest result",
+    )
+    bench_show_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print raw benchmark JSON instead of the formatted report",
+    )
+    bench_show_parser.add_argument(
+        "--failures-only",
+        action="store_true",
+        help="Show only failed cases",
+    )
+    bench_show_parser.add_argument(
+        "--judge-disagrees",
+        action="store_true",
+        help="Show only cases where the judge said deterministic scoring was not fair",
+    )
+    bench_show_parser.add_argument(
+        "--case",
+        help="Show only cases whose id contains this string",
+    )
+    bench_show_parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Shorter case view for faster skimming",
+    )
 
     subparsers.add_parser("version", help="Print the CLI version")
     return parser
@@ -206,6 +271,69 @@ def _follow_startup_log(log_path: Path, pid: int) -> bool:
         time.sleep(0.1)
 
 
+def _wait_for_bench_ready(base_url: str, timeout_seconds: float = 180.0) -> float:
+    started_at = time.time()
+    deadline = started_at + timeout_seconds
+    while time.time() < deadline:
+        try:
+            _ensure_bench_reachable(base_url)
+            return time.time() - started_at
+        except Exception:
+            time.sleep(0.5)
+    _ensure_bench_reachable(base_url)
+    return time.time() - started_at
+
+
+def _ensure_bench_reachable(base_url: str) -> None:
+    import requests
+
+    response = requests.get(f"{base_url}/models", timeout=10)
+    response.raise_for_status()
+
+
+def _run_benchmark_with_launch(
+    stack_name: str,
+    root: Path,
+    keep_running: bool,
+) -> tuple[dict[str, object], Path, str]:
+    stack = resolve_stack(stack_name, root=root)
+    service = stack.services[stack.primary_service]
+    launch_started_at = time.time()
+    runtime_stack = launch_stack(stack_name, root=root)
+    primary_runtime = next(
+        runtime_service
+        for runtime_service in runtime_stack.services
+        if runtime_service.name == stack.primary_service
+    )
+    base_url = _service_base_url(service.host, service.port)
+    try:
+        startup_ok = _follow_startup_log(Path(primary_runtime.log_path), primary_runtime.pid)
+        if not startup_ok:
+            raise BenchmarkError(
+                "launched stack exited before startup completed; "
+                f"see log: {primary_runtime.log_path}"
+            )
+        ready_seconds = _wait_for_bench_ready(base_url)
+        launch_observation = {
+            "source": "agentmux_launch",
+            "launch_started_at": time.strftime(
+                "%Y-%m-%dT%H:%M:%SZ", time.gmtime(launch_started_at)
+            ),
+            "ready_after_seconds": round(ready_seconds, 3),
+            "kept_running": keep_running,
+        }
+        return run_benchmark(
+            stack_name,
+            root,
+            target_mode="launched",
+            launch_observation=launch_observation,
+        )
+    finally:
+        if not keep_running:
+            stop_runtime(runtime_stack)
+            clear_active()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -272,6 +400,43 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "history":
         for item in load_history(limit=args.limit):
             print(f"{item.stack} ({item.track}) started_at={item.started_at:.0f}")
+        return 0
+
+    if args.command == "bench":
+        try:
+            if args.launch:
+                _result, _path, summary = _run_benchmark_with_launch(
+                    args.stack,
+                    args.root,
+                    args.keep_running,
+                )
+            else:
+                _result, _path, summary = run_benchmark(args.stack, args.root)
+        except BenchmarkError as exc:
+            raise SystemExit(str(exc)) from exc
+        except Exception as exc:
+            raise SystemExit(f"benchmark failed: {exc}") from exc
+        print(summary)
+        return 0
+
+    if args.command == "bench-show":
+        try:
+            result, path = read_result(args.result)
+        except FileNotFoundError as exc:
+            raise SystemExit(str(exc)) from exc
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(
+                render_detailed_report(
+                    result,
+                    path,
+                    failures_only=args.failures_only,
+                    judge_disagrees=args.judge_disagrees,
+                    case_filter=args.case,
+                    compact=args.compact,
+                )
+            )
         return 0
 
     if args.command == "version":

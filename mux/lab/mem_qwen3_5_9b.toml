@@ -1,14 +1,14 @@
 [stack]
-name = "qwen3_5"
+name = "qwen-mem"
 track = "lab"
 primary_service = "llm"
-notes = "Minimal tool-capable Qwen3.5 multi-modal-model."
+notes = "Minimal tool-capable Qwen3.5 multi-modal-model with Hindsight memory."
 
 [defaults]
 # host = "0.0.0.0"
 
 [defaults.args]
-dtype = "bfloat16"
+dtype = "auto"
 load_format = "auto"
 gpu_memory_utilization = 0.98
 max_num_seqs = 10
@@ -16,7 +16,7 @@ max_num_seqs = 10
 [services.llm]
 engine = "vllm"
 runtime_bin_dir = ".venv-vllm/bin"
-model = "${MODEL_ROOT}/hf-snapshots/qwen3.5-9b/current"
+model = "${QUANT_ROOT}/llm-compressor-artifacts/qwen3.5-9b-fp8-block"
 port = 8002
 served_model_name = "qwen3.5-9b"
 # extra_args = ["--disable-log-requests"]
@@ -51,3 +51,24 @@ kv_cache_dtype = "fp8_e4m3"
 
 [services.llm.assets]
 chat_template = "assets/chat_templates/qwen3_codex_compat.jinja"
+
+[services.memory]
+engine = "hindsight"
+host = "127.0.0.1"
+port = 8888
+runtime_bin_dir = ".venv-hindsight/bin"
+data_dir = "${HINDSIGHT_DATA_ROOT}"
+llm_service = "llm"
+
+[services.memory.env]
+HINDSIGHT_API_EMBEDDINGS_PROVIDER = "local"
+HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU = "true"
+
+HINDSIGHT_API_RERANKER_PROVIDER = "local"
+HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU = "true"
+
+# [[services.llm.loras]]
+# name = "coder"
+# path = "${LORA_ROOT}/coder-lora"
+# base_model = "Qwen3.5-9B"
+# enabled = false

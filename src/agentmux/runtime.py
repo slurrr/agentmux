@@ -162,14 +162,34 @@ def runtime_status(runtime_stack: RuntimeStack | None) -> dict[str, Any]:
     }
 
 
+def _wait_for_service_exit(pid: int, timeout_seconds: float = 10.0) -> bool:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if not pid_is_running(pid):
+            return True
+        time.sleep(0.1)
+    return not pid_is_running(pid)
+
+
 def stop_runtime(runtime_stack: RuntimeStack) -> None:
     for service in runtime_stack.services:
         if not service.managed or service.pid <= 0:
             continue
         try:
-            os.killpg(os.getpgid(service.pid), signal.SIGTERM)
+            pgid = os.getpgid(service.pid)
         except ProcessLookupError:
             continue
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        if _wait_for_service_exit(service.pid):
+            continue
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        _wait_for_service_exit(service.pid, timeout_seconds=2.0)
     clear_active()
 
 

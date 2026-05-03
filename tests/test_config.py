@@ -26,6 +26,13 @@ def test_resolve_stack_supports_multi_service_shape() -> None:
     assert stack.services["coder"].assets.values["chat_template"] == "assets/chat_templates/coder.jinja"
 
 
+def test_resolve_stack_supports_bench_track_example() -> None:
+    stack = resolve_stack("example_bench_mux")
+    assert stack.track == "examples"
+    assert stack.services["main"].args["generation_config"] == "vllm"
+    assert stack.services["main"].args["max_model_len"] == 8192
+
+
 def test_resolve_stack_loads_system_prompt_asset() -> None:
     stack = resolve_stack("example_vllm_recipes")
     assert stack.services["generalist"].assets.values["system_prompt"] == "assets/prompts/generalist_system.md"

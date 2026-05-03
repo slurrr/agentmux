@@ -5,6 +5,7 @@ This directory holds stack manifests for `agentmux`.
 ## Layout
 - `core/`: known-good stacks you actually use
 - `lab/`: active experiments and tuning work
+- `bench/`: benchmark-only stacks for apples-to-apples comparisons
 - `examples/`: reference material and copyable example stacks
 
 ## Manifest Philosophy
@@ -16,7 +17,7 @@ Normal manifests should stay close to real operator intent:
 
 That means a normal manifest should usually show the model name you actually want to serve and the settings you actually care about.
 
-Examples in `core/` and `lab/` should favor clarity over completeness.
+Examples in `core/`, `lab/`, and `bench/` should favor clarity over completeness.
 
 ## Why The Archive Example Is Simpler Now
 An earlier version of the archive example tried to show too many capabilities at once. That made it worse as documentation.
@@ -213,5 +214,6 @@ treated as the stack default.
 ## Guidance
 - Copy from `core/` or `lab/` when you want a real starting point.
 - Use `examples/` for reference shapes and copyable examples.
+- Use `bench/` for benchmark-only stacks where the serving shape should stay fixed across models.
 - Keep examples realistic.
 - Use advanced features only when you actually need them.

@@ -274,11 +274,13 @@
                         {%- elif tool_body is sequence and tool_body is not string -%}
                             {%- set ns_txt = namespace(s='') -%}
                             {%- for part in tool_body -%}
-                                {%- if part.get('type') == 'text' -%}
+                                {%- if part is mapping and part.get('type') == 'text' -%}
                                     {%- set ns_txt.s = ns_txt.s + (part.get('text') | default('')) -%}
+                                {%- elif part is string -%}
+                                    {%- set ns_txt.s = ns_txt.s + part -%}
                                 {%- endif -%}
                             {%- endfor -%}
-                            {{- format_tool_response_block(ns_tname.name, ns_txt.s) -}}
+                            {{- format_tool_response_block(ns_tname.name, ns_txt.s if ns_txt.s else tool_body) -}}
                         {%- else -%}
                             {{- format_tool_response_block(ns_tname.name, tool_body) -}}
                         {%- endif -%}
