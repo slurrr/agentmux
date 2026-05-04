@@ -10,36 +10,19 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.116,<1",
-    "huggingface_hub==1.7.2",
     "httpx>=0.28,<0.29",
-    "nvidia-cuda-runtime-cu12==12.8.90",
     "python-dotenv>=1.0.0",
     "requests>=2.32,<3",
-    "torch==2.10.0+cu130",
-    "torchaudio==2.10.0+cu130",
-    "torchvision==0.25.0+cu130",
-    "vllm==0.19.1",
-    "hindsight-all>=0.4.22",
 ]
 
 [project.scripts]
 agentmux = "agentmux.main:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0.0", "ruff>=0.11.0", "python-dotenv>=1.0.0"]
+dev = ["pytest>=8.0.0", "pyright>=1.1.0", "ruff>=0.11.0", "python-dotenv>=1.0.0"]
 
 [tool.uv]
 environments = ["sys_platform == 'linux'"]
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu130" }
-torchaudio = { index = "pytorch-cu130" }
-torchvision = { index = "pytorch-cu130" }
-
-[[tool.uv.index]]
-name = "pytorch-cu130"
-url = "https://download.pytorch.org/whl/cu130"
-explicit = true
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -64,4 +47,4 @@ quote-style = "double"
 typeCheckingMode = "basic"
 reportMissingImports = false
 venvPath = "."
-venv = ".venv"
+venv = ".venv-vllm"
