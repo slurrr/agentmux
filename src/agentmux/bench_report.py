@@ -245,6 +245,7 @@ def render_summary(result: dict[str, Any], result_path: Path) -> str:
     aggregate = serving.get("aggregate", {})
     vram = categories["vram"]
     quality = categories["quality_no_tools"]
+    quality_with_tools = categories.get("quality_with_tools")
     reliability = categories["reliability"]
     first_event = aggregate.get(
         "client_observed_avg_time_to_first_stream_event_seconds",
@@ -309,9 +310,27 @@ def render_summary(result: dict[str, Any], result_path: Path) -> str:
         [
             "",
             _rule("quality without tools", fill="-"),
-            _kv("score", f"{summary['quality_score']:.3f}"),
+            _kv("score", f"{float(quality.get('score', summary['quality_score'])):.3f}"),
             _kv("passed cases", f"{quality['passed_cases']}/{quality['total_cases']}"),
             "",
+        ]
+    )
+    if isinstance(quality_with_tools, dict):
+        lines.extend(
+            [
+                _rule("quality with tools", fill="-"),
+                _kv("score", f"{float(quality_with_tools.get('score', 0.0)):.3f}"),
+                _kv(
+                    "passed cases",
+                    f"{quality_with_tools.get('passed_cases', 0)}/{quality_with_tools.get('total_cases', 0)}",
+                ),
+                _kv("tool calls", f"{quality_with_tools.get('total_tool_calls', 0)}"),
+                _kv("invalid tool calls", f"{quality_with_tools.get('invalid_tool_calls', 0)}"),
+                "",
+            ]
+        )
+    lines.extend(
+        [
             _rule("reliability", fill="-"),
             _kv(
                 "structured output failure rate",
@@ -832,6 +851,22 @@ def _append_request_accounting(lines: list[str], result: dict[str, Any]) -> None
             indent=0,
         )
     )
+    if "local_workspace_requests" in accounting:
+        lines.append(
+            _kv(
+                "Local Workspace Requests",
+                str(accounting.get("local_workspace_requests", 0)),
+                indent=0,
+            )
+        )
+    if "local_workspace_tool_calls" in accounting:
+        lines.append(
+            _kv(
+                "Local Workspace Tool Calls",
+                str(accounting.get("local_workspace_tool_calls", 0)),
+                indent=0,
+            )
+        )
     lines.append(
         _kv(
             "External Judge Requests",
@@ -942,6 +977,45 @@ def render_detailed_report(
                 lines.extend(_bullets("judge on deterministic scoring", deterministic_notes))
         elif not compact:
             lines.append(_kv("judge", "not present in this saved result", indent=2))
+
+        workspace = case.get("workspace")
+        if isinstance(workspace, dict):
+            changed_files = list(workspace.get("changed_files") or [])
+            lines.append(_kv("fixture", str(case.get("fixture", "-"))))
+            lines.append(
+                _kv(
+                    "changed files",
+                    ", ".join(changed_files) if changed_files else "none",
+                )
+            )
+            stop_reason = workspace.get("conversation_stop_reason")
+            if stop_reason:
+                lines.append(_kv("conversation stop", str(stop_reason)))
+            file_checks = list(workspace.get("file_checks") or [])
+            if file_checks and not compact:
+                lines.append("  file checks:")
+                for entry in file_checks:
+                    status = str(entry.get("status", "?")).upper()
+                    path = str(entry.get("path", "workspace"))
+                    check = str(entry.get("check", ""))
+                    lines.append(_kv(f"[{status}] {path}", check, indent=4))
+            tool_summary = case.get("tool_summary")
+            if isinstance(tool_summary, dict):
+                lines.append(_kv("tool calls", str(tool_summary.get("total_calls", 0))))
+                lines.append(_kv("invalid tool calls", str(tool_summary.get("invalid_calls", 0))))
+            tool_trace = list(case.get("tool_trace") or [])
+            if tool_trace and not compact:
+                lines.append("  tool trace:")
+                for item in tool_trace:
+                    header = f"step {item.get('step', '?')}: {item.get('tool', 'tool')}"
+                    validity = "ok" if item.get("valid") else "invalid"
+                    lines.append(_kv(header, validity, indent=4))
+                    error = item.get("error")
+                    if error:
+                        lines.append(_kv("error", str(error), indent=6))
+                    preview = item.get("result_preview")
+                    if preview:
+                        lines.append(_kv("result", str(preview), indent=6))
 
         response = str(case.get("response", ""))
         lines.extend(_response_block(response, max_chars=220 if compact else 420))

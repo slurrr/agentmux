@@ -220,11 +220,7 @@
 
 {%- if add_generation_prompt %}
     {{- '<|im_start|>assistant\n' }}
-    {%- if tools and tools is iterable and tools is not mapping %}
-        {{- '' }}
-    {%- elif ns_flags.enable_thinking is false %}
+    {%- if ns_flags.enable_thinking is false %}
         {{- '<think>\n\n</think>\n\n' }}
-    {%- else %}
-        {{- '<think>\n' }}
     {%- endif %}
 {%- endif %}

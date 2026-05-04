@@ -20,6 +20,7 @@ from agentmux.bench_cases import PROFILE_NAME, PROFILE_VERSION, QUALITY_CASES, S
 from agentmux.bench_judge import load_judge_client
 from agentmux.bench_report import render_summary, write_result
 from agentmux.bench_score import build_reliability_summary, evaluate_case, verdict_summary
+from agentmux.bench_workspace import _assistant_message_parts, run_workspace_benchmark
 from agentmux.config import ServiceSpec, resolve_stack
 from agentmux.runner import build_stack_plan
 from agentmux.runtime import read_active
@@ -103,7 +104,9 @@ def run_benchmark(
         metrics_during_serving = sampler.stop()
     metrics_after_serving = _capture_metrics_snapshot(base_url)
     vram = _capture_vram_stats()
-    case_results = _run_quality_benchmark(base_url, model_name, judge_client)
+    no_tool_case_results = _run_quality_benchmark(base_url, model_name, judge_client)
+    workspace_case_results, workspace_stats = run_workspace_benchmark(base_url, model_name)
+    case_results = [*no_tool_case_results, *workspace_case_results]
     metrics_after_quality = _capture_metrics_snapshot(base_url)
     reliability = build_reliability_summary(case_results)
     observed_startup = _parse_startup_log(runtime_log_path)
@@ -117,10 +120,26 @@ def run_benchmark(
     )
     _merge_observed_runtime_into_serving(serving, observed_runtime)
     verdict = verdict_summary(case_results, serving)
-    quality_summary = {
-        "score": verdict.quality_score,
-        "total_cases": len(case_results),
-        "passed_cases": sum(1 for item in case_results if item["passed"]),
+    quality_no_tools_summary = {
+        "score": round(
+            sum(float(item["score"]) for item in no_tool_case_results)
+            / max(1, len(no_tool_case_results)),
+            3,
+        ),
+        "total_cases": len(no_tool_case_results),
+        "passed_cases": sum(1 for item in no_tool_case_results if item["passed"]),
+    }
+    quality_with_tools_summary = {
+        "score": round(
+            sum(float(item["score"]) for item in workspace_case_results)
+            / max(1, len(workspace_case_results)),
+            3,
+        ),
+        "total_cases": len(workspace_case_results),
+        "passed_cases": sum(1 for item in workspace_case_results if item["passed"]),
+        "total_tool_calls": workspace_stats["tool_calls"],
+        "invalid_tool_calls": workspace_stats["invalid_tool_calls"],
+        "model_requests": workspace_stats["model_requests"],
     }
     result = {
         "benchmark_version": PROFILE_VERSION,
@@ -163,7 +182,8 @@ def run_benchmark(
             "categories": {
                 "serving": serving,
                 "vram": vram,
-                "quality_no_tools": quality_summary,
+                "quality_no_tools": quality_no_tools_summary,
+                "quality_with_tools": quality_with_tools_summary,
                 "reliability": asdict(reliability),
             },
         },
@@ -171,7 +191,9 @@ def run_benchmark(
         "request_accounting": {
             "local_serving_requests": serving["aggregate"]["request_counts"]["serving_requests"],
             "local_serving_cells": serving["aggregate"]["request_counts"]["serving_cells"],
-            "local_quality_requests": len(case_results),
+            "local_quality_requests": len(no_tool_case_results),
+            "local_workspace_requests": workspace_stats["model_requests"],
+            "local_workspace_tool_calls": workspace_stats["tool_calls"],
             "external_judge_requests": sum(
                 1 for item in case_results if isinstance(item.get("judge"), dict)
             ),
@@ -436,13 +458,12 @@ def _stream_request(
             choices = payload_obj.get("choices", [])
             if choices:
                 delta = choices[0].get("delta", {})
-                for field in ("content", "reasoning"):
-                    text = delta.get(field)
-                    if isinstance(text, str) and text:
-                        if first_event_at is None:
-                            first_event_at = time.perf_counter()
-                        content_parts.append(text)
-                        stream_fields_seen.add(field)
+                text = delta.get("content")
+                if isinstance(text, str) and text:
+                    if first_event_at is None:
+                        first_event_at = time.perf_counter()
+                    content_parts.append(text)
+                    stream_fields_seen.add("content")
             usage = payload_obj.get("usage")
             if isinstance(usage, dict):
                 completion = usage.get("completion_tokens")
@@ -478,7 +499,9 @@ def _run_quality_benchmark(base_url: str, model_name: str, judge_client) -> list
 
     disabled_judge = _DisabledJudge()
     for case in QUALITY_CASES:
-        response_text = _chat_completion(base_url, model_name, case.prompt, max_tokens=220)
+        response_text, thinking_text = _chat_completion_parts(
+            base_url, model_name, case.prompt, max_tokens=2048
+        )
         evaluation = evaluate_case(case, response_text, disabled_judge)
         result = {
             "id": case.id,
@@ -487,6 +510,7 @@ def _run_quality_benchmark(base_url: str, model_name: str, judge_client) -> list
             "default_judge_enabled": case.default_judge_enabled,
             "prompt": case.prompt,
             "response": response_text,
+            "thinking": thinking_text,
             "score": evaluation.score,
             "passed": evaluation.passed,
             "deterministic_failures": evaluation.deterministic_failures,
@@ -528,7 +552,9 @@ def _run_quality_benchmark(base_url: str, model_name: str, judge_client) -> list
     return results
 
 
-def _chat_completion(base_url: str, model_name: str, prompt: str, max_tokens: int) -> str:
+def _chat_completion_parts(
+    base_url: str, model_name: str, prompt: str, max_tokens: int
+) -> tuple[str, str]:
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": prompt}],
@@ -542,7 +568,12 @@ def _chat_completion(base_url: str, model_name: str, prompt: str, max_tokens: in
     )
     response.raise_for_status()
     data = response.json()
-    return str(data["choices"][0]["message"]["content"])
+    return _assistant_message_parts(dict(data["choices"][0]["message"]))
+
+
+def _chat_completion(base_url: str, model_name: str, prompt: str, max_tokens: int) -> str:
+    response_text, _thinking_text = _chat_completion_parts(base_url, model_name, prompt, max_tokens)
+    return response_text
 
 
 def _service_base_url(service: ServiceSpec) -> str:

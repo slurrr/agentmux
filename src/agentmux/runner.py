@@ -354,9 +354,25 @@ def _wait_for_service_exit(pid: int, timeout_seconds: float = 10.0) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
         if not pid_is_running(pid):
+            _reap_child_process(pid)
             return True
         time.sleep(0.1)
-    return not pid_is_running(pid)
+    if not pid_is_running(pid):
+        _reap_child_process(pid)
+        return True
+    return False
+
+
+def _reap_child_process(pid: int) -> None:
+    try:
+        while True:
+            waited_pid, _status = os.waitpid(pid, os.WNOHANG)
+            if waited_pid == 0:
+                return
+            if waited_pid == pid:
+                return
+    except ChildProcessError:
+        return
 
 
 def _terminate_runtime_services(services: list[RuntimeService]) -> None:
@@ -366,16 +382,26 @@ def _terminate_runtime_services(services: list[RuntimeService]) -> None:
         try:
             pgid = os.getpgid(service.pid)
         except ProcessLookupError:
+            _reap_child_process(service.pid)
+            continue
+        try:
+            os.killpg(pgid, signal.SIGINT)
+        except ProcessLookupError:
+            _reap_child_process(service.pid)
+            continue
+        if _wait_for_service_exit(service.pid):
             continue
         try:
             os.killpg(pgid, signal.SIGTERM)
         except ProcessLookupError:
+            _reap_child_process(service.pid)
             continue
         if _wait_for_service_exit(service.pid):
             continue
         try:
             os.killpg(pgid, signal.SIGKILL)
         except ProcessLookupError:
+            _reap_child_process(service.pid)
             continue
         _wait_for_service_exit(service.pid, timeout_seconds=2.0)
 

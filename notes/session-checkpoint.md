@@ -1,71 +1,44 @@
 # Current Goal
-Stabilize the Phase-1 benchmark so launch, serving telemetry, and quality reporting are consistent enough to trust full-vs-variant comparisons.
+Make the workspace benchmark replay history the same way Pi does for the active Qwen3.5 serving stack, then re-run the full bench.
 
 # Current State
-- `agentmux bench --launch` exists and now waits for startup log readiness before benchmarking.
-- Teardown was tightened in:
-  - `src/agentmux/runtime.py`
-  - `src/agentmux/runner.py`
-  - shutdown now does `SIGTERM` -> wait -> `SIGKILL` fallback -> wait.
-- Judge behavior was redesigned:
-  - deterministic score/pass-fail is authoritative again
-  - judge is advisory only
-  - one batched judge call per run, not per case
-  - judge returns only:
-    - `deterministic_score_fit`
-    - `deterministic_notes`
-    - optional `quality_note`
-- `bench-show` improvements now include:
-  - human-readable startup/runtime sections
-  - requested vs resolved verification for dtype / kv cache dtype / max model len / chunked prefill / quantization
-  - judge display as `Judge Verdict` / `Judge Note`
-  - case sorting puts judge disagreements first, then failures, then passes
-- Prometheus runtime capture now has two layers:
-  - before/after serving deltas for counters
-  - during-serving scrapes every 0.5s for gauges
-- Prometheus serving output now includes useful counter-derived metrics:
-  - requests completed
-  - prompt / generation tokens
-  - mean TTFT / E2E / queue / inference / prefill / decode
-  - mean request time per output token
-  - mean inter-token latency
-  - mean prompt/output tokens per request
-  - prefix cache queries / hits
-  - prompt tokens cached
-- Current gauge finding:
-  - request-running gauge looks useful
-  - KV cache usage gauge still stays at `0%` during active scrapes on this vLLM build / workload, so it is likely not trustworthy here
-- Recent real run with batched judge:
-  - `~/runs/agentmux/benchmarks/20260503-105403-qwen3_5-fp8-bench-ghosty-local-agent.json`
-- This morning's successful fp8 launches were startup-consistent:
-  - `dtype=torch.bfloat16`
-  - `kv_cache_dtype=auto`
-  - `quantization=compressed-tensors`
-  - `FLASH_ATTN`
-  - `62,304` KV tokens
-  - compile cache hit
-  - model load ~`12.72 GiB`
-- This morning's intermittent launch failures were real runtime failures, not bench rendering bugs:
-  - segfaults and CPU-side `MemoryError` during multimodal processor init
+- Active serving stack now under test:
+  - manifest: `mux/bench/qwen3.5_9b.toml`
+  - model: `qwen3.5_9b`
+  - runtime: `.venv-vllm` / vLLM `0.20.0`
+  - template: `assets/chat_templates/qwen3.5_hf_fix_chat_template.jinja`
+  - parsers: `tool_call_parser=qwen3_xml`, `reasoning_parser=qwen3`
+- Root cause of the 400s is identified:
+  - not parser failure
+  - not malformed bench messages
+  - bench was replaying tool results as JSON blobs in `tool.content`
+  - with this template stack, JSON-looking tool-result text gets replay-normalized into a shape the template rejects with `Unexpected content type`
+- Pi comparison:
+  - Pi keeps richer internal history, but when it sends OpenAI chat-completions payloads it flattens tool results to plain text `role="tool"` messages and keeps assistant tool-call turns as `content=null` plus reasoning/tool_calls.
+- Bench replay now matches that shape more closely.
+- Local fix implemented in `src/agentmux/bench_workspace.py`:
+  - assistant replay tool-call turns use `content=None`
+  - replay uses `reasoning` instead of `reasoning_content`
+  - tool results are replayed as plain text summaries / file contents, not JSON envelopes
+  - `tool` replay messages no longer include `name`
+- Verified live against the running server on `http://127.0.0.1:8002/v1`:
+  - workspace replay no longer 400s
+  - passing cases: `update_api_base_url`, `rename_timeout_key_everywhere_needed`, `add_readme_environment_section`
+  - remaining failing workspace case: `ambiguous_production_switch_requires_clarification` (behavioral, not transport/replay)
+  - latest ad-hoc workspace stats: `model_requests=15`, `tool_calls=18`, `invalid_tool_calls=0`
 
 # Decisions
-- Do not let judge affect case score or benchmark score.
-- Keep judge on all cases, but as one batched advisory review call per run.
-- Prefer Prometheus data over vLLM logger data for runtime truth whenever possible.
-- Keep vLLM logger throughput/cache lines as secondary evidence only; do not expand reliance on them.
-- Treat Prometheus counter deltas as the primary serving/runtime metrics for Phase 1.
-- Treat the current KV cache usage Prometheus gauge as suspicious unless a later verification pass proves otherwise.
+- Treat the workspace replay problem as a client-side history-format bug, not a parser bug.
+- Align benchmark replay with Pi-style OpenAI completions replay.
+- Keep thinking preserved; do not disable thinking to make the benchmark pass.
+- Keep tool-result replay human/plain-text, not JSON-structured.
 
 # Open Problems
-- Need to verify whether stricter teardown reduces the intermittent first-launch failure pattern in repeated `--launch` runs.
-- Need a targeted Prometheus verification pass for KV/cache-related metrics if we want a trustworthy cache-usage signal before Phase 2.
-- Throughput still varies across runs more than desired; likely next tightening is a slightly longer / steadier serving window, not more logger dependence.
+- Full `agentmux bench` has not been re-run yet after the workspace replay fix.
+- No-tool benchmark behavior still needs re-validation under the current template/manifest.
+- `ambiguous_production_switch_requires_clarification` still over-edits instead of clarifying.
 
 # Resume Instructions
-1. Re-run `agentmux bench qwen3_5-fp8-bench --launch` several times and check whether stricter stop/wait reduces the fail-then-succeed pattern.
-2. Inspect the newest result with `agentmux bench-show` and confirm:
-   - batched judge payloads are present
-   - judge disagreements sort first
-   - Prometheus serving metrics look stable
-3. If launch is still flaky, investigate process cleanup / resource reuse around failed launches before changing benchmark semantics again.
-4. If launch is improved, do the next narrow pass on trustworthy Prometheus KV/cache metrics rather than adding more custom runtime heuristics.
+1. Re-run the full benchmark for `qwen3_5-bench` with the current manifest.
+2. Inspect the new benchmark JSON for both `quality_no_tools` and `quality_with_tools`.
+3. If only the ambiguous workspace case fails, fix that behavior separately from transport/history replay.

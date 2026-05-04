@@ -195,7 +195,17 @@ def _extract_pi_assistant_text(stdout: str) -> str:
 def load_judge_client() -> JudgeClient:
     auth_source = os.environ.get("AGENTMUX_BENCH_JUDGE_AUTH_FILE", str(DEFAULT_AUTH_PATH))
     model = os.environ.get("AGENTMUX_BENCH_JUDGE_MODEL", DEFAULT_MODEL)
+    enabled_raw = os.environ.get("AGENTMUX_BENCH_JUDGE_ENABLED", "0").strip().lower()
     auth_path = Path(auth_source)
+    if enabled_raw not in {"1", "true", "yes", "on"}:
+        return JudgeClient(
+            enabled=False,
+            provider="pi-cli",
+            model=model,
+            auth_source=str(auth_path),
+            base_url=os.environ.get("AGENTMUX_BENCH_JUDGE_PI_COMMAND", DEFAULT_PI_COMMAND),
+            reason="disabled_by_env",
+        )
     if not auth_path.exists():
         return JudgeClient(
             enabled=False,

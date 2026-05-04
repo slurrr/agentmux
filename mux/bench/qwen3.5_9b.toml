@@ -34,8 +34,9 @@ reasoning_parser = "qwen3"
 exclude_tools_when_tool_choice_none = true
 enable-force-include-usage = true
 chat_template_content_format = "openai"
-default_chat_template_kwargs = "{\"enable_thinking\":false}"
+# default_chat_template_kwargs = "{\"enable_thinking\":false}"
 # kv_cache_dtype = "fp8_e4m3"
+# attention_backend = "FLASHINFER"
 
 [services.main.assets]
-chat_template = "assets/chat_templates/qwen3_codex_compat.jinja"
+chat_template = "assets/chat_templates/qwen3.5_hf_fix_chat_template.jinja"

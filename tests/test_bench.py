@@ -3,10 +3,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from agentmux.bench import _stream_request
+from agentmux.bench import _chat_completion, _chat_completion_parts, _stream_request
 from agentmux.bench_cases import QUALITY_CASES
 from agentmux.bench_judge import JudgeClient, JudgeResult, load_judge_client
 from agentmux.bench_score import evaluate_case
+from agentmux.bench_workspace import _assistant_message_parts, _message_text, _score_rename_timeout_key_everywhere_needed
 from agentmux.main import main
 
 
@@ -38,7 +39,11 @@ class _BenchHandler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
-        prompt = payload["messages"][0]["content"]
+        prompt = next(
+            message["content"]
+            for message in reversed(payload["messages"])
+            if message.get("role") == "user"
+        )
         if payload.get("stream"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -50,15 +55,15 @@ class _BenchHandler(BaseHTTPRequestHandler):
             )
             self.wfile.write(body.encode("utf-8"))
             return
-        response_text = _response_for_prompt(prompt)
+        message = (
+            _workspace_response_for_payload(payload)
+            if payload.get("tools")
+            else {"role": "assistant", "content": _response_for_prompt(prompt)}
+        )
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(
-            json.dumps(
-                {"choices": [{"message": {"role": "assistant", "content": response_text}}]}
-            ).encode("utf-8")
-        )
+        self.wfile.write(json.dumps({"choices": [{"message": message}]}).encode("utf-8"))
 
     def log_message(self, format, *args):  # noqa: A003
         return
@@ -120,6 +125,144 @@ def _response_for_prompt(prompt: str) -> str:
     raise AssertionError(f"unhandled prompt: {prompt}")
 
 
+def _tool_call(call_id: str, name: str, arguments: dict[str, object]) -> dict[str, object]:
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments)},
+    }
+
+
+def _workspace_response_for_payload(payload: dict[str, object]) -> dict[str, object]:
+    messages = payload["messages"]
+    user_prompt = next(
+        message["content"] for message in messages if message.get("role") == "user"
+    )
+    tool_messages = [message for message in messages if message.get("role") == "tool"]
+    if "production endpoint" in user_prompt:
+        if not tool_messages:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_tool_call("call_read_app", "read", {"path": "config/app.toml"})],
+            }
+        if len(tool_messages) == 1:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    _tool_call(
+                        "call_edit_app",
+                        "edit",
+                        {
+                            "path": "config/app.toml",
+                            "old_text": 'api_base_url = "https://staging-api.example.com/v1"',
+                            "new_text": 'api_base_url = "https://api.example.com/v1"',
+                        },
+                    )
+                ],
+            }
+        return {
+            "role": "assistant",
+            "content": "Updated config/app.toml to use the production API base URL.",
+        }
+    if "timeout setting name" in user_prompt:
+        if not tool_messages:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_tool_call("call_read_cfg", "read", {"path": "config/app.toml"})],
+            }
+        if len(tool_messages) == 1:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_tool_call("call_read_docs", "read", {"path": "docs/config.md"})],
+            }
+        if len(tool_messages) == 2:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    _tool_call(
+                        "call_edit_cfg",
+                        "edit",
+                        {
+                            "path": "config/app.toml",
+                            "old_text": "timeout_secs = 45",
+                            "new_text": "request_timeout_secs = 45",
+                        },
+                    )
+                ],
+            }
+        if len(tool_messages) == 3:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    _tool_call(
+                        "call_edit_docs",
+                        "edit",
+                        {
+                            "path": "docs/config.md",
+                            "old_text": "`timeout_secs`",
+                            "new_text": "`request_timeout_secs`",
+                        },
+                    )
+                ],
+            }
+        return {
+            "role": "assistant",
+            "content": "Updated config/app.toml and docs/config.md to use request_timeout_secs.",
+        }
+    if "required env vars" in user_prompt:
+        if not tool_messages:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_tool_call("call_read_env", "read", {"path": "config/sample.env"})],
+            }
+        if len(tool_messages) == 1:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [_tool_call("call_read_readme", "read", {"path": "README.md"})],
+            }
+        if len(tool_messages) == 2:
+            return {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    _tool_call(
+                        "call_write_readme",
+                        "write",
+                        {
+                            "path": "README.md",
+                            "content": (
+                                "# Tiny API Service\n\n"
+                                "Run the service locally after setting the required environment variables.\n\n"
+                                "## Environment\n\n"
+                                "Set these variables before starting the service.\n\n"
+                                "- API_BASE_URL\n"
+                                "- API_TOKEN\n"
+                                "- REQUEST_TIMEOUT_SECS\n"
+                            ),
+                        },
+                    )
+                ],
+            }
+        return {
+            "role": "assistant",
+            "content": "Added an Environment section to README.md listing API_BASE_URL, API_TOKEN, and REQUEST_TIMEOUT_SECS.",
+        }
+    if "switch the API base URL to production in the config" in user_prompt:
+        return {
+            "role": "assistant",
+            "content": "Which config should I update: config/app.toml or config/worker.toml?",
+        }
+    raise AssertionError(f"unhandled workspace prompt: {user_prompt}")
+
+
 def test_bench_command_writes_result_file(tmp_path: Path, monkeypatch, capsys) -> None:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _BenchHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -156,6 +299,8 @@ port = {server.server_port}
         payload = json.loads(files[0].read_text(encoding="utf-8"))
         assert payload["profile"] == "ghosty-local-agent"
         assert payload["summary"]["categories"]["quality_no_tools"]["total_cases"] == 12
+        assert payload["summary"]["categories"]["quality_with_tools"]["total_cases"] == 4
+        assert payload["request_accounting"]["local_workspace_tool_calls"] >= 1
         assert "vram" in payload["summary"]["categories"]
         assert payload["judge"]["enabled"] is False
         assert payload["declared_config"]["model"] == "bench-model"
@@ -165,7 +310,7 @@ port = {server.server_port}
         server.server_close()
 
 
-def test_stream_request_counts_reasoning_as_stream_output() -> None:
+def test_stream_request_ignores_reasoning_stream_output() -> None:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _BenchHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -179,12 +324,67 @@ def test_stream_request_counts_reasoning_as_stream_output() -> None:
         )
         assert metrics.client_observed_time_to_first_stream_event_seconds >= 0.0
         assert metrics.output_tokens == 3
-        assert metrics.response_text == "check logs first"
-        assert metrics.stream_fields_seen == ("reasoning",)
+        assert metrics.response_text == ""
+        assert metrics.stream_fields_seen == ()
     finally:
         server.shutdown()
         server.server_close()
 
+
+
+def test_workspace_message_text_uses_raw_content_and_reasoning_fields() -> None:
+    assert _message_text({"content": "done"}) == "done"
+    assert _message_text({"content": None, "reasoning_content": "thinking aloud"}) == ""
+    assert _assistant_message_parts(
+        {"content": "answer", "reasoning_content": "thinking aloud"}
+    ) == ("answer", "thinking aloud")
+    assert _assistant_message_parts(
+        {"content": None, "reasoning_content": "thinking aloud"}
+    ) == ("", "thinking aloud")
+
+
+def test_chat_completion_uses_reasoning_when_content_is_empty(monkeypatch) -> None:
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "reasoning_content": "final answer",
+                        }
+                    }
+                ]
+            }
+
+    def fake_post(*args, **kwargs):
+        return _FakeResponse()
+
+    monkeypatch.setattr("agentmux.bench.requests.post", fake_post)
+
+    assert _chat_completion("http://example/v1", "model", "prompt", 20) == ""
+    response, thinking = _chat_completion_parts("http://example/v1", "model", "prompt", 20)
+    assert response == ""
+    assert thinking == "final answer"
+
+
+def test_rename_timeout_score_ignores_request_substring() -> None:
+    before = {
+        "config/app.toml": '[service]\nname = "web-api"\ntimeout_secs = 45\napi_base_url = "https://api.example.com/v1"\n',
+        "docs/config.md": '# Config\n\n- `timeout_secs`: request timeout in seconds.\n- `api_base_url`: upstream API base URL.\n',
+    }
+    after = {
+        "config/app.toml": '[service]\nname = "web-api"\nrequest_timeout_secs = 45\napi_base_url = "https://api.example.com/v1"\n',
+        "docs/config.md": '# Config\n\n- `request_timeout_secs`: request timeout in seconds.\n- `api_base_url`: upstream API base URL.\n',
+    }
+    result = _score_rename_timeout_key_everywhere_needed(before, after, "updated both files", [], "final_answer")
+    assert result["deterministic_failures"] == []
+    assert result["file_checks"][0]["status"] == "pass"
+    assert result["file_checks"][1]["status"] == "pass"
 
 
 def test_load_judge_client_uses_pi_cli_provider(tmp_path: Path, monkeypatch) -> None:
@@ -192,6 +392,7 @@ def test_load_judge_client_uses_pi_cli_provider(tmp_path: Path, monkeypatch) -> 
     auth_path.write_text("{}", encoding="utf-8")
     monkeypatch.setenv("AGENTMUX_BENCH_JUDGE_AUTH_FILE", str(auth_path))
     monkeypatch.setenv("AGENTMUX_BENCH_JUDGE_PI_COMMAND", "pi")
+    monkeypatch.setenv("AGENTMUX_BENCH_JUDGE_ENABLED", "1")
 
     judge = load_judge_client()
 
