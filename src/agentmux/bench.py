@@ -16,10 +16,16 @@ from typing import Any
 import requests
 
 from agentmux import __version__
-from agentmux.bench_cases import PROFILE_NAME, PROFILE_VERSION, QUALITY_CASES, SERVING_PROMPTS
-from agentmux.bench_judge import load_judge_client
+from agentmux.bench_cases import (
+    PROFILE_NAME,
+    PROFILE_VERSION,
+    QUALITY_CASES,
+    SERVING_PROMPTS,
+)
+from agentmux.bench_judge import JudgeClient, load_judge_client
 from agentmux.bench_report import render_summary, write_result
 from agentmux.bench_score import build_reliability_summary, evaluate_case, verdict_summary
+from agentmux.bench_tokens import TokenCountResult, count_text_tokens
 from agentmux.bench_workspace import _assistant_message_parts, run_workspace_benchmark
 from agentmux.config import ServiceSpec, resolve_stack
 from agentmux.runner import build_stack_plan
@@ -48,8 +54,125 @@ class RequestMetrics:
     stream_fields_seen: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ChatCompletionDetails:
+    response_text: str
+    thinking_text: str
+    usage: dict[str, int]
+    tool_calls: tuple[dict[str, Any], ...]
+    request_error: dict[str, Any] | None = None
+    elapsed_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class RequestOutcome:
+    ok: bool
+    metrics: RequestMetrics | None = None
+    error: dict[str, Any] | None = None
+    elapsed_seconds: float = 0.0
+
+
 class BenchmarkError(RuntimeError):
     pass
+
+
+def _error_payload(
+    exc: Exception,
+    *,
+    phase: str,
+    elapsed_seconds: float,
+    timeout_seconds: float | None = None,
+    request_index: int | None = None,
+    case_id: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "phase": phase,
+        "error_type": exc.__class__.__name__,
+        "message": str(exc),
+        "elapsed_seconds": round(elapsed_seconds, 4),
+    }
+    if timeout_seconds is not None:
+        payload["timeout_seconds"] = timeout_seconds
+    if request_index is not None:
+        payload["request_index"] = request_index
+    if case_id is not None:
+        payload["case_id"] = case_id
+    return payload
+
+
+def _safe_mean(values: list[float]) -> float | None:
+    return round(statistics.mean(values), 4) if values else None
+
+
+def _tokenizer_resolution(service: ServiceSpec, model_name: str) -> dict[str, Any]:
+    assets = service.assets.values if service.assets is not None else {}
+    tokenizer_path = assets.get("tokenizer") or service.model or model_name
+    source = "service.assets.tokenizer" if assets.get("tokenizer") else "service.model"
+    return {
+        "path": tokenizer_path,
+        "source": source,
+        "safe_local_only": True,
+    }
+
+
+def _tool_calls_text(tool_calls: tuple[dict[str, Any], ...]) -> str:
+    if not tool_calls:
+        return ""
+    return json.dumps(tool_calls, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _count_with_metadata(text: str, tokenizer_path: str) -> TokenCountResult:
+    return count_text_tokens(text, tokenizer_path)
+
+
+def _build_token_accounting(
+    *,
+    response_text: str,
+    tool_calls: tuple[dict[str, Any], ...],
+    completion_tokens: int,
+    tokenizer_path: str,
+) -> dict[str, Any]:
+    response_count = _count_with_metadata(response_text, tokenizer_path)
+    tool_call_text = _tool_calls_text(tool_calls)
+    tool_call_count = (
+        _count_with_metadata(tool_call_text, tokenizer_path) if tool_call_text else None
+    )
+    tool_call_tokens = tool_call_count.tokens if tool_call_count is not None else 0
+    thinking_tokens = max(0, completion_tokens - response_count.tokens - tool_call_tokens)
+    thinking_exact = response_count.loaded and not response_count.fallback_used and not tool_calls
+    tool_call_estimated = bool(tool_calls)
+    return {
+        "response_tokens": response_count.tokens,
+        "visible_response_tokens": response_count.tokens,
+        "tool_call_tokens": tool_call_tokens,
+        "thinking_tokens": thinking_tokens,
+        "derived_thinking_tokens": thinking_tokens,
+        "thinking_tokens_exact": thinking_exact,
+        "thinking_tokens_source": (
+            "completion_tokens_minus_visible_response_tokens"
+            if not tool_calls
+            else "completion_tokens_minus_visible_response_tokens_minus_estimated_tool_call_tokens"
+        ),
+        "tool_call_tokens_exact": not tool_calls,
+        "tool_call_tokens_source": ("none" if not tool_calls else "canonical_tool_calls_json"),
+        "tool_call_tokens_estimated": tool_call_estimated,
+        "response_tokenizer": {
+            "path": response_count.tokenizer_path,
+            "loaded": response_count.loaded,
+            "fallback_used": response_count.fallback_used,
+            "fallback_reason": response_count.fallback_reason,
+        },
+        "tool_call_tokenizer": (
+            None
+            if tool_call_count is None
+            else {
+                "path": tool_call_count.tokenizer_path,
+                "loaded": tool_call_count.loaded,
+                "fallback_used": tool_call_count.fallback_used,
+                "fallback_reason": tool_call_count.fallback_reason,
+            }
+        ),
+    }
 
 
 class _PrometheusSampler:
@@ -88,6 +211,8 @@ def run_benchmark(
     model_name = service.served_model_name or service.model
     if model_name is None:
         raise BenchmarkError(f"Primary service {service.name} has no model configured")
+    tokenizer_resolution = _tokenizer_resolution(service, model_name)
+    tokenizer_source = str(tokenizer_resolution["path"])
     base_url = _service_base_url(service)
     _ensure_reachable(base_url)
 
@@ -99,13 +224,22 @@ def run_benchmark(
     sampler = _PrometheusSampler(base_url)
     sampler.start()
     try:
-        serving = _run_serving_benchmark(base_url, model_name)
+        serving = _run_serving_benchmark(base_url, model_name, tokenizer_source)
     finally:
         metrics_during_serving = sampler.stop()
     metrics_after_serving = _capture_metrics_snapshot(base_url)
     vram = _capture_vram_stats()
-    no_tool_case_results = _run_quality_benchmark(base_url, model_name, judge_client)
-    workspace_case_results, workspace_stats = run_workspace_benchmark(base_url, model_name)
+    no_tool_case_results = _run_quality_benchmark(
+        base_url,
+        model_name,
+        judge_client,
+        tokenizer_source,
+    )
+    workspace_case_results, workspace_stats = run_workspace_benchmark(
+        base_url,
+        model_name,
+        tokenizer_source,
+    )
     case_results = [*no_tool_case_results, *workspace_case_results]
     metrics_after_quality = _capture_metrics_snapshot(base_url)
     reliability = build_reliability_summary(case_results)
@@ -128,6 +262,7 @@ def run_benchmark(
         ),
         "total_cases": len(no_tool_case_results),
         "passed_cases": sum(1 for item in no_tool_case_results if item["passed"]),
+        "failed_cases": sum(1 for item in no_tool_case_results if item.get("status") == "failed"),
     }
     quality_with_tools_summary = {
         "score": round(
@@ -137,10 +272,16 @@ def run_benchmark(
         ),
         "total_cases": len(workspace_case_results),
         "passed_cases": sum(1 for item in workspace_case_results if item["passed"]),
+        "failed_cases": sum(1 for item in workspace_case_results if item.get("status") == "failed"),
         "total_tool_calls": workspace_stats["tool_calls"],
         "invalid_tool_calls": workspace_stats["invalid_tool_calls"],
         "model_requests": workspace_stats["model_requests"],
     }
+    thinking_summary = _build_thinking_summary(case_results)
+    case_failures = sum(1 for item in case_results if item.get("status") == "failed")
+    serving_failures = int(
+        serving.get("aggregate", {}).get("request_counts", {}).get("failed_requests", 0)
+    )
     result = {
         "benchmark_version": PROFILE_VERSION,
         "profile": PROFILE_NAME,
@@ -157,6 +298,9 @@ def run_benchmark(
             "base_url": base_url,
             "model": model_name,
             "launch_observation": launch_observation,
+            "status": "partial" if (case_failures or serving_failures) else "completed",
+            "failed_cases": case_failures,
+            "failed_requests": serving_failures,
         },
         "environment": {
             "python": sys.executable,
@@ -170,6 +314,7 @@ def run_benchmark(
             "reason": judge_client.reason,
         },
         "declared_config": declared_config,
+        "tokenizer": tokenizer_resolution,
         "observed_startup": observed_startup,
         "observed_runtime": observed_runtime,
         "summary": {
@@ -184,6 +329,7 @@ def run_benchmark(
                 "vram": vram,
                 "quality_no_tools": quality_no_tools_summary,
                 "quality_with_tools": quality_with_tools_summary,
+                "thinking": thinking_summary,
                 "reliability": asdict(reliability),
             },
         },
@@ -194,6 +340,8 @@ def run_benchmark(
             "local_quality_requests": len(no_tool_case_results),
             "local_workspace_requests": workspace_stats["model_requests"],
             "local_workspace_tool_calls": workspace_stats["tool_calls"],
+            "failed_cases": case_failures,
+            "failed_requests": serving_failures,
             "external_judge_requests": sum(
                 1 for item in case_results if isinstance(item.get("judge"), dict)
             ),
@@ -252,15 +400,21 @@ def _runtime_log_path(stack_name: str, primary_service: str) -> str | None:
     return None
 
 
-def _run_serving_benchmark(base_url: str, model_name: str) -> dict[str, Any]:
+def _run_serving_benchmark(
+    base_url: str,
+    model_name: str,
+    tokenizer_source: str,
+) -> dict[str, Any]:
     prompt_results: list[dict[str, Any]] = []
-    summary_by_concurrency: dict[str, dict[str, float]] = {}
-    all_metrics: list[RequestMetrics] = []
+    summary_by_concurrency: dict[str, dict[str, Any]] = {}
+    all_successes: list[RequestMetrics] = []
+    all_failures: list[dict[str, Any]] = []
     first_request_metric: RequestMetrics | None = None
     for concurrency in SERVING_CONCURRENCY_LEVELS:
-        metrics: list[RequestMetrics] = []
+        concurrency_successes: list[RequestMetrics] = []
+        concurrency_failures: list[dict[str, Any]] = []
         for prompt in SERVING_PROMPTS:
-            prompt_metrics = _run_concurrent_streams(
+            outcomes = _run_concurrent_streams(
                 base_url=base_url,
                 model_name=model_name,
                 prompt=prompt.prompt,
@@ -268,77 +422,90 @@ def _run_serving_benchmark(base_url: str, model_name: str) -> dict[str, Any]:
                 max_tokens=prompt.max_tokens,
                 concurrency=concurrency,
             )
-            if first_request_metric is None and prompt_metrics:
-                first_request_metric = prompt_metrics[0]
-            metrics.extend(prompt_metrics)
-            all_metrics.extend(prompt_metrics)
+            prompt_successes = [
+                outcome.metrics for outcome in outcomes if outcome.ok and outcome.metrics
+            ]
+            prompt_failures = [
+                outcome.error for outcome in outcomes if not outcome.ok and outcome.error
+            ]
+            if first_request_metric is None and prompt_successes:
+                first_request_metric = prompt_successes[0]
+            concurrency_successes.extend(prompt_successes)
+            concurrency_failures.extend(prompt_failures)
+            all_successes.extend(prompt_successes)
+            all_failures.extend(prompt_failures)
             prompt_results.append(
                 {
                     "prompt_id": prompt.id,
                     "concurrency": concurrency,
                     "source": "client_observed",
-                    "avg_request_wall_time_seconds": round(
-                        statistics.mean(
+                    "status": "ok" if prompt_successes else "failed",
+                    "successful_requests": len(prompt_successes),
+                    "failed_requests": len(prompt_failures),
+                    "avg_request_wall_time_seconds": _safe_mean(
+                        [
                             item.client_observed_request_wall_time_seconds
-                            for item in prompt_metrics
-                        ),
-                        4,
+                            for item in prompt_successes
+                        ]
                     ),
-                    "avg_time_to_first_stream_event_seconds": round(
-                        statistics.mean(
+                    "avg_time_to_first_stream_event_seconds": _safe_mean(
+                        [
                             item.client_observed_time_to_first_stream_event_seconds
-                            for item in prompt_metrics
-                        ),
-                        4,
+                            for item in prompt_successes
+                        ]
                     ),
-                    "avg_output_tokens_per_second": round(
-                        statistics.mean(
-                            item.client_observed_output_tokens_per_second for item in prompt_metrics
-                        ),
-                        4,
+                    "avg_output_tokens_per_second": _safe_mean(
+                        [item.client_observed_output_tokens_per_second for item in prompt_successes]
                     ),
-                    "stream_field_counts": _stream_field_counts(prompt_metrics),
+                    "stream_field_counts": _stream_field_counts(prompt_successes),
+                    "failures": prompt_failures,
                 }
             )
-        avg_first = statistics.mean(
-            item.client_observed_time_to_first_stream_event_seconds for item in metrics
-        )
-        avg_wall = statistics.mean(
-            item.client_observed_request_wall_time_seconds for item in metrics
-        )
-        avg_tps = statistics.mean(item.client_observed_output_tokens_per_second for item in metrics)
         summary_by_concurrency[str(concurrency)] = {
             "source": "client_observed",
-            "avg_request_wall_time_seconds": round(avg_wall, 4),
-            "avg_time_to_first_stream_event_seconds": round(avg_first, 4),
-            "avg_output_tokens_per_second": round(avg_tps, 4),
+            "status": "ok" if concurrency_successes else "failed",
+            "successful_requests": len(concurrency_successes),
+            "failed_requests": len(concurrency_failures),
+            "avg_request_wall_time_seconds": _safe_mean(
+                [item.client_observed_request_wall_time_seconds for item in concurrency_successes]
+            ),
+            "avg_time_to_first_stream_event_seconds": _safe_mean(
+                [
+                    item.client_observed_time_to_first_stream_event_seconds
+                    for item in concurrency_successes
+                ]
+            ),
+            "avg_output_tokens_per_second": _safe_mean(
+                [item.client_observed_output_tokens_per_second for item in concurrency_successes]
+            ),
         }
+    one_tps = summary_by_concurrency.get("1", {}).get("avg_output_tokens_per_second")
+    four_tps = summary_by_concurrency.get("4", {}).get("avg_output_tokens_per_second")
     efficiency = 0.0
-    one_tps = summary_by_concurrency["1"]["avg_output_tokens_per_second"]
-    four_tps = summary_by_concurrency["4"]["avg_output_tokens_per_second"]
-    if one_tps > 0:
-        efficiency = min(1.0, max(0.0, four_tps / one_tps))
+    if isinstance(one_tps, (int, float)) and isinstance(four_tps, (int, float)) and one_tps > 0:
+        efficiency = min(1.0, max(0.0, float(four_tps) / float(one_tps)))
     all_first = [
-        entry["avg_time_to_first_stream_event_seconds"] for entry in summary_by_concurrency.values()
+        entry["avg_time_to_first_stream_event_seconds"]
+        for entry in summary_by_concurrency.values()
+        if isinstance(entry.get("avg_time_to_first_stream_event_seconds"), (int, float))
     ]
-    all_tps = [entry["avg_output_tokens_per_second"] for entry in summary_by_concurrency.values()]
-    remaining_metrics = all_metrics[1:] if len(all_metrics) > 1 else []
+    all_tps = [
+        entry["avg_output_tokens_per_second"]
+        for entry in summary_by_concurrency.values()
+        if isinstance(entry.get("avg_output_tokens_per_second"), (int, float))
+    ]
     aggregate = {
         "source": "client_observed",
-        "client_observed_avg_time_to_first_stream_event_seconds": round(
-            statistics.mean(all_first), 4
+        "client_observed_avg_time_to_first_stream_event_seconds": _safe_mean(all_first),
+        "client_observed_avg_request_wall_time_seconds": _safe_mean(
+            [item.client_observed_request_wall_time_seconds for item in all_successes]
         ),
-        "client_observed_avg_request_wall_time_seconds": round(
-            statistics.mean(
-                item.client_observed_request_wall_time_seconds for item in all_metrics
-            ),
-            4,
-        ),
-        "client_observed_avg_output_tokens_per_second": round(statistics.mean(all_tps), 4),
+        "client_observed_avg_output_tokens_per_second": _safe_mean(all_tps),
         "client_observed_concurrency_4_efficiency": round(efficiency, 4),
         "request_counts": {
-            "serving_requests": len(all_metrics),
+            "serving_requests": len(all_successes),
             "serving_cells": len(prompt_results),
+            "failed_requests": len(all_failures),
         },
     }
     if first_request_metric is not None:
@@ -357,29 +524,24 @@ def _run_serving_benchmark(base_url: str, model_name: str) -> dict[str, Any]:
             ),
             "stream_fields_seen": list(first_request_metric.stream_fields_seen),
         }
-    if remaining_metrics:
+    if len(all_successes) > 1:
+        remaining_metrics = all_successes[1:]
         aggregate["after_first_request"] = {
-            "client_observed_avg_request_wall_time_seconds": round(
-                statistics.mean(
-                    item.client_observed_request_wall_time_seconds
-                    for item in remaining_metrics
-                ),
-                4,
+            "client_observed_avg_request_wall_time_seconds": _safe_mean(
+                [item.client_observed_request_wall_time_seconds for item in remaining_metrics]
             ),
-            "client_observed_avg_time_to_first_stream_event_seconds": round(
-                statistics.mean(
+            "client_observed_avg_time_to_first_stream_event_seconds": _safe_mean(
+                [
                     item.client_observed_time_to_first_stream_event_seconds
                     for item in remaining_metrics
-                ),
-                4,
+                ]
             ),
-            "client_observed_avg_output_tokens_per_second": round(
-                statistics.mean(
-                    item.client_observed_output_tokens_per_second for item in remaining_metrics
-                ),
-                4,
+            "client_observed_avg_output_tokens_per_second": _safe_mean(
+                [item.client_observed_output_tokens_per_second for item in remaining_metrics]
             ),
         }
+    if all_failures:
+        aggregate["request_failures"] = all_failures
     return {
         "prompt_results": prompt_results,
         "by_concurrency": summary_by_concurrency,
@@ -403,7 +565,7 @@ def _run_concurrent_streams(
     temperature: float,
     max_tokens: int,
     concurrency: int,
-) -> list[RequestMetrics]:
+) -> list[RequestOutcome]:
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = [
             executor.submit(
@@ -425,50 +587,64 @@ def _stream_request(
     prompt: str,
     temperature: float,
     max_tokens: int,
-) -> RequestMetrics:
+) -> RequestOutcome:
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,
+        "thinking_token_budget": 2048,
     }
     started_at = time.perf_counter()
     first_event_at: float | None = None
     content_parts: list[str] = []
     output_tokens = 0
     stream_fields_seen: set[str] = set()
-    with requests.post(
-        f"{base_url}/chat/completions",
-        json=payload,
-        stream=True,
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    ) as response:
-        response.raise_for_status()
-        for raw_line in response.iter_lines(decode_unicode=True):
-            if not raw_line:
-                continue
-            line = raw_line.strip()
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if data == "[DONE]":
-                break
-            payload_obj = json.loads(data)
-            choices = payload_obj.get("choices", [])
-            if choices:
-                delta = choices[0].get("delta", {})
-                text = delta.get("content")
-                if isinstance(text, str) and text:
-                    if first_event_at is None:
-                        first_event_at = time.perf_counter()
-                    content_parts.append(text)
-                    stream_fields_seen.add("content")
-            usage = payload_obj.get("usage")
-            if isinstance(usage, dict):
-                completion = usage.get("completion_tokens")
-                if isinstance(completion, int) and completion > 0:
-                    output_tokens = completion
+    try:
+        with requests.post(
+            f"{base_url}/chat/completions",
+            json=payload,
+            stream=True,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        ) as response:
+            response.raise_for_status()
+            for raw_line in response.iter_lines(decode_unicode=True):
+                if not raw_line:
+                    continue
+                line = raw_line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                payload_obj = json.loads(data)
+                choices = payload_obj.get("choices", [])
+                if choices:
+                    delta = choices[0].get("delta", {})
+                    text = delta.get("content")
+                    if isinstance(text, str) and text:
+                        if first_event_at is None:
+                            first_event_at = time.perf_counter()
+                        content_parts.append(text)
+                        stream_fields_seen.add("content")
+                usage = payload_obj.get("usage")
+                if isinstance(usage, dict):
+                    completion = usage.get("completion_tokens")
+                    if isinstance(completion, int) and completion > 0:
+                        output_tokens = completion
+    except Exception as exc:  # noqa: BLE001
+        finished_at = time.perf_counter()
+        return RequestOutcome(
+            ok=False,
+            error=_error_payload(
+                exc,
+                phase="stream_request",
+                elapsed_seconds=finished_at - started_at,
+                timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+            ),
+            elapsed_seconds=finished_at - started_at,
+        )
     finished_at = time.perf_counter()
     if first_event_at is None:
         first_event_at = finished_at
@@ -477,31 +653,90 @@ def _stream_request(
         output_tokens = max(1, len(response_text.split()))
     wall_time = finished_at - started_at
     generate_seconds = max(finished_at - first_event_at, 1e-6)
-    return RequestMetrics(
-        client_observed_request_wall_time_seconds=wall_time,
-        client_observed_time_to_first_stream_event_seconds=first_event_at - started_at,
-        output_tokens=output_tokens,
-        client_observed_output_tokens_per_second=output_tokens / generate_seconds,
-        response_text=response_text,
-        stream_fields_seen=tuple(sorted(stream_fields_seen)),
+    return RequestOutcome(
+        ok=True,
+        metrics=RequestMetrics(
+            client_observed_request_wall_time_seconds=wall_time,
+            client_observed_time_to_first_stream_event_seconds=first_event_at - started_at,
+            output_tokens=output_tokens,
+            client_observed_output_tokens_per_second=output_tokens / generate_seconds,
+            response_text=response_text,
+            stream_fields_seen=tuple(sorted(stream_fields_seen)),
+        ),
+        elapsed_seconds=wall_time,
     )
 
 
-def _run_quality_benchmark(base_url: str, model_name: str, judge_client) -> list[dict[str, Any]]:
+def _run_quality_benchmark(
+    base_url: str,
+    model_name: str,
+    judge_client,
+    tokenizer_source: str,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     judge_cases: list[dict[str, Any]] = []
 
-    class _DisabledJudge:
-        enabled = False
-
-        def evaluate(self, prompt, response, case_id, deterministic_context=None):
-            return None
-
-    disabled_judge = _DisabledJudge()
+    disabled_judge = JudgeClient(
+        enabled=False,
+        provider="disabled",
+        model=model_name,
+        auth_source="",
+        base_url="",
+        reason="disabled_for_benchmark_scoring",
+    )
     for case in QUALITY_CASES:
-        response_text, thinking_text = _chat_completion_parts(
-            base_url, model_name, case.prompt, max_tokens=2048
+        details = _chat_completion_details(
+            base_url,
+            model_name,
+            case.prompt,
+            max_tokens=4096,
         )
+        completion_tokens = int(details.usage.get("completion_tokens", 0))
+        token_accounting = _build_token_accounting(
+            response_text=details.response_text,
+            tool_calls=details.tool_calls,
+            completion_tokens=completion_tokens,
+            tokenizer_path=tokenizer_source,
+        )
+        if details.request_error is not None:
+            error_message = str(details.request_error.get("message", "request failed"))
+            reliability_flags = {
+                "structured_output_failure": False,
+                "constraint_violation": False,
+                "hallucination_fabrication": False,
+                "empty_evasive_degenerate": True,
+                "request_failed": True,
+            }
+            result = {
+                "id": case.id,
+                "group": case.group,
+                "judge_eligible": case.judge_eligible,
+                "default_judge_enabled": case.default_judge_enabled,
+                "prompt": case.prompt,
+                "response": "",
+                "thinking": "",
+                "score": 0.0,
+                "passed": False,
+                "deterministic_failures": [error_message],
+                "rubric_passes": [],
+                "rubric_failures": [],
+                "reliability_flags": reliability_flags,
+                "judge": None,
+                "usage": details.usage,
+                "status": "failed",
+                "failure": details.request_error,
+                "token_accounting": {
+                    **token_accounting,
+                    "prompt_tokens": int(details.usage.get("prompt_tokens", 0)),
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": int(details.usage.get("total_tokens", 0)),
+                    "token_source": tokenizer_source,
+                },
+            }
+            results.append(result)
+            continue
+        response_text = details.response_text
+        thinking_text = details.thinking_text
         evaluation = evaluate_case(case, response_text, disabled_judge)
         result = {
             "id": case.id,
@@ -518,6 +753,15 @@ def _run_quality_benchmark(base_url: str, model_name: str, judge_client) -> list
             "rubric_failures": evaluation.rubric_failures,
             "reliability_flags": evaluation.reliability_flags,
             "judge": None,
+            "usage": details.usage,
+            "status": "ok",
+            "token_accounting": {
+                **token_accounting,
+                "prompt_tokens": int(details.usage.get("prompt_tokens", 0)),
+                "completion_tokens": completion_tokens,
+                "total_tokens": int(details.usage.get("total_tokens", 0)),
+                "token_source": tokenizer_source,
+            },
         }
         results.append(result)
         if case.default_judge_enabled:
@@ -536,9 +780,7 @@ def _run_quality_benchmark(base_url: str, model_name: str, judge_client) -> list
                 }
             )
     judge_results = judge_client.evaluate_many(judge_cases)
-    judge_context_by_case = {
-        item["case_id"]: item["deterministic_context"] for item in judge_cases
-    }
+    judge_context_by_case = {item["case_id"]: item["deterministic_context"] for item in judge_cases}
     for result in results:
         judge_result = judge_results.get(result["id"])
         if judge_result is None:
@@ -552,23 +794,114 @@ def _run_quality_benchmark(base_url: str, model_name: str, judge_client) -> list
     return results
 
 
-def _chat_completion_parts(
+def _summarize_thinking_cases(case_results: list[dict[str, Any]]) -> dict[str, Any]:
+    accounting: list[dict[str, Any]] = []
+    for case in case_results:
+        token_accounting = case.get("token_accounting")
+        if isinstance(token_accounting, dict):
+            accounting.append(token_accounting)
+    total_cases = len(accounting)
+    total_completion = sum(int(item.get("completion_tokens", 0)) for item in accounting)
+    total_visible = sum(int(item.get("visible_response_tokens", 0)) for item in accounting)
+    total_tool_calls = sum(int(item.get("tool_call_tokens", 0)) for item in accounting)
+    total_thinking = sum(
+        int(item.get("thinking_tokens", item.get("derived_thinking_tokens", 0)))
+        for item in accounting
+    )
+    exact_cases = sum(1 for item in accounting if bool(item.get("thinking_tokens_exact", False)))
+    estimated_cases = total_cases - exact_cases
+    return {
+        "source": "completion_tokens_minus_visible_response_tokens_minus_tool_call_tokens",
+        "total_cases": total_cases,
+        "exact_cases": exact_cases,
+        "estimated_cases": estimated_cases,
+        "total_completion_tokens": total_completion,
+        "total_visible_response_tokens": total_visible,
+        "total_tool_call_tokens": total_tool_calls,
+        "total_thinking_tokens": total_thinking,
+        "mean_completion_tokens": round(total_completion / total_cases, 3) if total_cases else 0.0,
+        "mean_visible_response_tokens": round(total_visible / total_cases, 3)
+        if total_cases
+        else 0.0,
+        "mean_tool_call_tokens": round(total_tool_calls / total_cases, 3) if total_cases else 0.0,
+        "mean_thinking_tokens": round(total_thinking / total_cases, 3) if total_cases else 0.0,
+    }
+
+
+def _build_thinking_summary(case_results: list[dict[str, Any]]) -> dict[str, Any]:
+    groups: dict[str, dict[str, Any]] = {}
+    for group_name in ("quality_no_tools", "quality_with_tools"):
+        group_cases = [case for case in case_results if case.get("group") == group_name]
+        if group_cases:
+            groups[group_name] = _summarize_thinking_cases(group_cases)
+    return {
+        "source": "completion_tokens_minus_visible_response_tokens_minus_tool_call_tokens",
+        "overall": _summarize_thinking_cases(case_results),
+        "groups": groups,
+    }
+
+
+def _chat_completion_details(
     base_url: str, model_name: str, prompt: str, max_tokens: int
-) -> tuple[str, str]:
+) -> ChatCompletionDetails:
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
         "max_tokens": max_tokens,
+        "thinking_token_budget": 2048,
     }
-    response = requests.post(
-        f"{base_url}/chat/completions",
-        json=payload,
-        timeout=REQUEST_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
-    data = response.json()
-    return _assistant_message_parts(dict(data["choices"][0]["message"]))
+    started_at = time.perf_counter()
+    try:
+        response = requests.post(
+            f"{base_url}/chat/completions",
+            json=payload,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        data = response.json()
+        usage = data.get("usage")
+        usage_payload = {
+            "prompt_tokens": int(usage.get("prompt_tokens", 0)) if isinstance(usage, dict) else 0,
+            "completion_tokens": int(usage.get("completion_tokens", 0))
+            if isinstance(usage, dict)
+            else 0,
+            "total_tokens": int(usage.get("total_tokens", 0)) if isinstance(usage, dict) else 0,
+        }
+        message = data.get("choices", [{}])[0].get("message", {})
+        response_text, thinking_text = _assistant_message_parts(dict(message))
+        tool_calls = tuple(
+            dict(item) for item in (message.get("tool_calls") or []) if isinstance(item, dict)
+        )
+        return ChatCompletionDetails(
+            response_text=response_text,
+            thinking_text=thinking_text,
+            usage=usage_payload,
+            tool_calls=tool_calls,
+            elapsed_seconds=time.perf_counter() - started_at,
+        )
+    except Exception as exc:  # noqa: BLE001
+        elapsed = time.perf_counter() - started_at
+        return ChatCompletionDetails(
+            response_text="",
+            thinking_text="",
+            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            tool_calls=(),
+            request_error=_error_payload(
+                exc,
+                phase="chat_completion",
+                elapsed_seconds=elapsed,
+                timeout_seconds=REQUEST_TIMEOUT_SECONDS,
+            ),
+            elapsed_seconds=elapsed,
+        )
+
+
+def _chat_completion_parts(
+    base_url: str, model_name: str, prompt: str, max_tokens: int
+) -> tuple[str, str]:
+    details = _chat_completion_details(base_url, model_name, prompt, max_tokens)
+    return details.response_text, details.thinking_text
 
 
 def _chat_completion(base_url: str, model_name: str, prompt: str, max_tokens: int) -> str:
@@ -870,9 +1203,7 @@ def _parse_runtime_logger_lines(log_path: str | None) -> dict[str, Any]:
         "samples": samples[-10:],
         "aggregate": {
             "prompt_throughput_tokens_per_second_mean": round(
-                statistics.mean(
-                    sample["prompt_throughput_tokens_per_second"] for sample in basis
-                ),
+                statistics.mean(sample["prompt_throughput_tokens_per_second"] for sample in basis),
                 3,
             ),
             "generation_throughput_tokens_per_second_mean": round(
@@ -1040,9 +1371,7 @@ def _summarize_metrics_delta(
         "mean_end_to_end_latency_seconds": (
             round(e2e_sum / e2e_count, 6) if e2e_count > 0 else None
         ),
-        "mean_queue_time_seconds": (
-            round(queue_sum / queue_count, 6) if queue_count > 0 else None
-        ),
+        "mean_queue_time_seconds": (round(queue_sum / queue_count, 6) if queue_count > 0 else None),
         "mean_inference_time_seconds": (
             round(inference_sum / inference_count, 6) if inference_count > 0 else None
         ),

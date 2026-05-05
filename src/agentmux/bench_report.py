@@ -246,7 +246,9 @@ def render_summary(result: dict[str, Any], result_path: Path) -> str:
     vram = categories["vram"]
     quality = categories["quality_no_tools"]
     quality_with_tools = categories.get("quality_with_tools")
+    thinking = categories.get("thinking")
     reliability = categories["reliability"]
+    run = result.get("run", {}) if isinstance(result.get("run"), dict) else {}
     first_event = aggregate.get(
         "client_observed_avg_time_to_first_stream_event_seconds",
         aggregate.get("avg_ttft_seconds", 0.0),
@@ -271,6 +273,7 @@ def render_summary(result: dict[str, Any], result_path: Path) -> str:
         _kv("result", str(result_path), indent=0),
         _kv("verdict", str(summary["verdict"]), indent=0),
         _kv("overall score", f"{summary['overall_score']:.3f}", indent=0),
+        _kv("run status", str(run.get("status", "unknown")), indent=0),
         _kv("kv cache dtype", str(kv_cache_dtype or "n/a"), indent=0),
         "",
         _rule("scorecard", fill="-"),
@@ -316,19 +319,63 @@ def render_summary(result: dict[str, Any], result_path: Path) -> str:
         ]
     )
     if isinstance(quality_with_tools, dict):
+        passed_cases = quality_with_tools.get("passed_cases", 0)
+        total_cases = quality_with_tools.get("total_cases", 0)
         lines.extend(
             [
                 _rule("quality with tools", fill="-"),
                 _kv("score", f"{float(quality_with_tools.get('score', 0.0)):.3f}"),
-                _kv(
-                    "passed cases",
-                    f"{quality_with_tools.get('passed_cases', 0)}/{quality_with_tools.get('total_cases', 0)}",
-                ),
+                _kv("passed cases", f"{passed_cases}/{total_cases}"),
                 _kv("tool calls", f"{quality_with_tools.get('total_tool_calls', 0)}"),
                 _kv("invalid tool calls", f"{quality_with_tools.get('invalid_tool_calls', 0)}"),
                 "",
             ]
         )
+    if isinstance(thinking, dict):
+        overall = thinking.get("overall", {}) if isinstance(thinking.get("overall"), dict) else {}
+        groups = thinking.get("groups", {}) if isinstance(thinking.get("groups"), dict) else {}
+        lines.extend(
+            [
+                _rule("thinking", fill="-"),
+                _kv(
+                    "avg thinking tokens",
+                    f"{float(overall.get('mean_thinking_tokens', 0.0)):.3f}",
+                ),
+                _kv(
+                    "avg tool-call tokens",
+                    f"{float(overall.get('mean_tool_call_tokens', 0.0)):.3f}",
+                ),
+                _kv(
+                    "exact cases",
+                    f"{int(overall.get('exact_cases', 0))}/{int(overall.get('total_cases', 0))}",
+                ),
+                _kv(
+                    "avg visible response tokens",
+                    f"{float(overall.get('mean_visible_response_tokens', 0.0)):.3f}",
+                ),
+                _kv(
+                    "avg completion tokens",
+                    f"{float(overall.get('mean_completion_tokens', 0.0)):.3f}",
+                ),
+            ]
+        )
+        group_no_tools = groups.get("quality_no_tools") if isinstance(groups, dict) else None
+        group_with_tools = groups.get("quality_with_tools") if isinstance(groups, dict) else None
+        if isinstance(group_no_tools, dict):
+            lines.append(
+                _kv(
+                    "no-tools avg thinking",
+                    f"{float(group_no_tools.get('mean_thinking_tokens', 0.0)):.3f}",
+                )
+            )
+        if isinstance(group_with_tools, dict):
+            lines.append(
+                _kv(
+                    "with-tools avg thinking",
+                    f"{float(group_with_tools.get('mean_thinking_tokens', 0.0)):.3f}",
+                )
+            )
+        lines.append("")
     lines.extend(
         [
             _rule("reliability", fill="-"),
@@ -375,9 +422,7 @@ def _append_client_observed(lines: list[str], result: dict[str, Any]) -> None:
             indent=0,
         )
     )
-    avg_client_output = float(
-        aggregate.get("client_observed_avg_output_tokens_per_second", 0.0)
-    )
+    avg_client_output = float(aggregate.get("client_observed_avg_output_tokens_per_second", 0.0))
     lines.append(
         _kv(
             "Average Client Output Rate",
@@ -454,13 +499,10 @@ def _append_client_observed(lines: list[str], result: dict[str, Any]) -> None:
             if not isinstance(item, dict):
                 continue
             wall = _format_seconds(item.get("avg_request_wall_time_seconds", 0.0))
-            first_event = _format_seconds(
-                item.get("avg_time_to_first_stream_event_seconds", 0.0)
-            )
+            first_event = _format_seconds(item.get("avg_time_to_first_stream_event_seconds", 0.0))
             output_rate = float(item.get("avg_output_tokens_per_second", 0.0))
             detail = (
-                f"wall {wall}, first event {first_event}, "
-                f"client output {output_rate:.2f} tok/s"
+                f"wall {wall}, first event {first_event}, client output {output_rate:.2f} tok/s"
             )
             lines.append(_kv(f"{key} request(s)", detail, indent=2))
 
@@ -610,18 +652,12 @@ def _append_observed_runtime(lines: list[str], result: dict[str, Any]) -> None:
                 lines.append(_kv("Lowest Active Sample", f"{generation_min:.2f} tok/s", indent=2))
             lines.append("")
             lines.append("Prompt Throughput:")
-            prompt_mean = float(
-                aggregate.get("prompt_throughput_tokens_per_second_mean", 0.0)
-            )
-            prompt_max = float(
-                aggregate.get("prompt_throughput_tokens_per_second_max", 0.0)
-            )
+            prompt_mean = float(aggregate.get("prompt_throughput_tokens_per_second_mean", 0.0))
+            prompt_max = float(aggregate.get("prompt_throughput_tokens_per_second_max", 0.0))
             lines.append(_kv("Mean Active Sample", f"{prompt_mean:.2f} tok/s", indent=2))
             lines.append(_kv("Peak Active Sample", f"{prompt_max:.2f} tok/s", indent=2))
             if aggregate.get("prompt_throughput_tokens_per_second_min") is not None:
-                prompt_min = float(
-                    aggregate.get("prompt_throughput_tokens_per_second_min", 0.0)
-                )
+                prompt_min = float(aggregate.get("prompt_throughput_tokens_per_second_min", 0.0))
                 lines.append(_kv("Lowest Active Sample", f"{prompt_min:.2f} tok/s", indent=2))
             lines.append("")
             lines.append("Scheduler / Cache:")
@@ -867,6 +903,14 @@ def _append_request_accounting(lines: list[str], result: dict[str, Any]) -> None
                 indent=0,
             )
         )
+    if "failed_cases" in accounting:
+        lines.append(
+            _kv(
+                "Failed Cases",
+                str(accounting.get("failed_cases", 0)),
+                indent=0,
+            )
+        )
     lines.append(
         _kv(
             "External Judge Requests",
@@ -943,19 +987,51 @@ def render_detailed_report(
         return "\n".join(lines).rstrip()
     for index, case in enumerate(cases, start=1):
         passed = bool(case.get("passed"))
-        status = "PASS" if passed else "FAIL"
-        glyph = "✓" if passed else "!"
+        case_status = str(case.get("status", "ok"))
+        status = (
+            "PASS"
+            if passed and case_status != "failed"
+            else ("ERROR" if case_status == "failed" else "FAIL")
+        )
+        glyph = "✓" if passed and case_status != "failed" else "!"
         header = (
             f"{glyph} [{status}] {index:02d}. {case['id']}"
             f"  ·  {case['group']}  ·  score {float(case['score']):.3f}"
         )
         lines.append(header)
+        token_accounting = case.get("token_accounting")
+        if isinstance(token_accounting, dict):
+            thinking_tokens = token_accounting.get(
+                "thinking_tokens", token_accounting.get("derived_thinking_tokens", 0)
+            )
+            source = str(token_accounting.get("thinking_tokens_source", "unknown"))
+            exact = bool(token_accounting.get("thinking_tokens_exact", False))
+            lines.append(
+                _kv(
+                    "Thinking Tokens",
+                    f"{int(thinking_tokens)} ({'exact' if exact else 'estimated'})",
+                )
+            )
+            lines.append(_kv("Thinking Source", source))
         lines.append("")
 
         deterministic = list(case.get("deterministic_failures") or [])
         rubric_failures = list(case.get("rubric_failures") or [])
         rubric_passes = list(case.get("rubric_passes") or [])
 
+        failure = case.get("failure")
+        if isinstance(failure, dict):
+            lines.extend(
+                [
+                    _rule("failure", fill="-"),
+                    _kv("phase", str(failure.get("phase", "unknown")), indent=2),
+                    _kv("error", str(failure.get("error_type", "Error")), indent=2),
+                    _kv("message", str(failure.get("message", "")), indent=2),
+                    _kv("elapsed", f"{float(failure.get('elapsed_seconds', 0.0)):.3f}s", indent=2),
+                ]
+            )
+            if failure.get("timeout_seconds") is not None:
+                lines.append(_kv("timeout", f"{float(failure['timeout_seconds']):.3f}s", indent=2))
         if deterministic:
             lines.extend(_bullets("deterministic failures", deterministic))
         if rubric_failures:
@@ -965,9 +1041,7 @@ def render_detailed_report(
 
         judge = case.get("judge")
         if isinstance(judge, dict):
-            verdict = _format_judge_verdict(
-                str(judge.get("deterministic_score_fit", "-"))
-            )
+            verdict = _format_judge_verdict(str(judge.get("deterministic_score_fit", "-")))
             lines.append(_kv("Judge Verdict", verdict))
             quality_note = judge.get("quality_note")
             if isinstance(quality_note, str) and quality_note.strip():

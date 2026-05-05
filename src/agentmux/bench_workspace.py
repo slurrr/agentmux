@@ -4,11 +4,14 @@ import json
 import re
 import shutil
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import requests
+
+from agentmux.bench_tokens import count_text_tokens
 
 WORKSPACE_SYSTEM_PROMPT = (
     "You are a concise coding assistant working inside a temporary workspace. "
@@ -26,9 +29,7 @@ WORKSPACE_TOOLS = [
             "description": "List files or directories under the workspace root.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Relative path to list."}
-                },
+                "properties": {"path": {"type": "string", "description": "Relative path to list."}},
                 "required": [],
                 "additionalProperties": False,
             },
@@ -95,12 +96,30 @@ _COMPLETION_PATTERN = re.compile(
 )
 
 
+def _error_payload(
+    exc: Exception,
+    *,
+    phase: str,
+    elapsed_seconds: float,
+    timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "phase": phase,
+        "error_type": exc.__class__.__name__,
+        "message": str(exc),
+        "elapsed_seconds": round(elapsed_seconds, 4),
+    }
+    if timeout_seconds is not None:
+        payload["timeout_seconds"] = timeout_seconds
+    return payload
+
+
 @dataclass(frozen=True)
 class WorkspaceCase:
     id: str
     prompt: str
     fixture: str
-    max_tokens: int = 2048
+    max_tokens: int = 4096
     max_turns: int = 8
 
 
@@ -141,7 +160,7 @@ WORKSPACE_CASES: tuple[WorkspaceCase, ...] = (
             "Please switch the API base URL to production in the config and let me know when "
             "it's done. Keep your reply brief."
         ),
-        max_tokens=2048,
+        max_tokens=4096,
         max_turns=4,
     ),
 )
@@ -150,39 +169,124 @@ WORKSPACE_CASES: tuple[WorkspaceCase, ...] = (
 def run_workspace_benchmark(
     base_url: str,
     model_name: str,
+    tokenizer_source: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     results: list[dict[str, Any]] = []
     total_requests = 0
     total_tool_calls = 0
     total_invalid_tool_calls = 0
+    total_failures = 0
     for case in WORKSPACE_CASES:
-        result = _run_workspace_case(case, base_url, model_name)
+        result = _run_workspace_case(case, base_url, model_name, tokenizer_source)
         results.append(result)
         tool_summary = result.get("tool_summary", {})
         total_requests += int(tool_summary.get("model_requests", 0))
         total_tool_calls += int(tool_summary.get("total_calls", 0))
         total_invalid_tool_calls += int(tool_summary.get("invalid_calls", 0))
+        if result.get("status") == "failed":
+            total_failures += 1
     stats = {
         "model_requests": total_requests,
         "tool_calls": total_tool_calls,
         "invalid_tool_calls": total_invalid_tool_calls,
+        "failed_cases": total_failures,
     }
     return results, stats
 
 
-def _run_workspace_case(case: WorkspaceCase, base_url: str, model_name: str) -> dict[str, Any]:
+def _run_workspace_case(
+    case: WorkspaceCase,
+    base_url: str,
+    model_name: str,
+    tokenizer_source: str,
+) -> dict[str, Any]:
     fixture_root = _fixture_root() / case.fixture
     with tempfile.TemporaryDirectory(prefix=f"agentmux-bench-{case.id}-") as temp_dir:
         workspace_root = Path(temp_dir) / "workspace"
         shutil.copytree(fixture_root, workspace_root)
         before = _snapshot_workspace(workspace_root)
-        final_answer, thinking, trace, model_requests, stop_reason = _run_workspace_conversation(
+        (
+            final_answer,
+            thinking,
+            trace,
+            model_requests,
+            stop_reason,
+            usage_totals,
+            visible_response_tokens,
+            request_error,
+            tool_calls_payloads,
+        ) = _run_workspace_conversation(
             case,
             base_url,
             model_name,
             workspace_root,
+            tokenizer_source,
         )
         after = _snapshot_workspace(workspace_root)
+    completion_tokens = int(usage_totals.get("completion_tokens", 0))
+    visible_tokens = int(visible_response_tokens)
+    token_accounting = _build_workspace_token_accounting(
+        response_text=final_answer,
+        tool_calls_payloads=tool_calls_payloads,
+        completion_tokens=completion_tokens,
+        visible_response_tokens=visible_tokens,
+        tokenizer_source=tokenizer_source,
+    )
+    if request_error is not None or stop_reason != "final_answer":
+        failure_reason = request_error or {
+            "phase": "workspace_conversation",
+            "error_type": "ConversationIncomplete",
+            "message": f"conversation stopped at {stop_reason}",
+            "elapsed_seconds": 0.0,
+        }
+        return {
+            "id": case.id,
+            "kind": "workspace",
+            "group": "quality_with_tools",
+            "fixture": case.fixture,
+            "judge_eligible": False,
+            "default_judge_enabled": False,
+            "prompt": case.prompt,
+            "response": final_answer,
+            "thinking": thinking,
+            "score": 0.0,
+            "passed": False,
+            "deterministic_failures": [
+                str(failure_reason.get("message", "workspace request failed"))
+            ],
+            "rubric_passes": [],
+            "rubric_failures": [],
+            "reliability_flags": {
+                "structured_output_failure": False,
+                "constraint_violation": False,
+                "hallucination_fabrication": False,
+                "empty_evasive_degenerate": True,
+                "request_failed": True,
+            },
+            "judge": None,
+            "usage": usage_totals,
+            "status": "failed",
+            "failure": failure_reason,
+            "token_accounting": {
+                **token_accounting,
+                "prompt_tokens": int(usage_totals.get("prompt_tokens", 0)),
+                "completion_tokens": completion_tokens,
+                "total_tokens": int(usage_totals.get("total_tokens", 0)),
+                "token_source": tokenizer_source,
+            },
+            "tool_trace": trace,
+            "tool_summary": {
+                "model_requests": model_requests,
+                "total_calls": len(trace),
+                "invalid_calls": sum(1 for item in trace if not item.get("valid", False)),
+                "tool_counts": _tool_counts(trace),
+            },
+            "workspace": {
+                "changed_files": sorted(_changed_files(before, after)),
+                "file_checks": [],
+                "conversation_stop_reason": stop_reason,
+            },
+        }
     evaluation = _evaluate_workspace_case(case, before, after, final_answer, trace, stop_reason)
     return {
         "id": case.id,
@@ -201,6 +305,15 @@ def _run_workspace_case(case: WorkspaceCase, base_url: str, model_name: str) -> 
         "rubric_failures": evaluation["rubric_failures"],
         "reliability_flags": evaluation["reliability_flags"],
         "judge": None,
+        "usage": usage_totals,
+        "status": "ok",
+        "token_accounting": {
+            **token_accounting,
+            "prompt_tokens": int(usage_totals.get("prompt_tokens", 0)),
+            "completion_tokens": completion_tokens,
+            "total_tokens": int(usage_totals.get("total_tokens", 0)),
+            "token_source": tokenizer_source,
+        },
         "tool_trace": trace,
         "tool_summary": {
             "model_requests": model_requests,
@@ -221,20 +334,48 @@ def _run_workspace_conversation(
     base_url: str,
     model_name: str,
     workspace_root: Path,
-) -> tuple[str, str, list[dict[str, Any]], int, str]:
+    tokenizer_source: str,
+) -> tuple[str, str, list[dict[str, Any]], int, str, dict[str, int], int, dict[str, Any] | None, list[dict[str, Any]]]:
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": WORKSPACE_SYSTEM_PROMPT},
         {"role": "user", "content": case.prompt},
     ]
     trace: list[dict[str, Any]] = []
     model_requests = 0
-    for _ in range(case.max_turns):
+    usage_totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    visible_response_tokens = 0
+    latest_response = ""
+    latest_thinking = ""
+    tool_calls_payloads: list[dict[str, Any]] = []
+    for turn_index in range(case.max_turns):
         model_requests += 1
-        message = _tool_chat_completion(base_url, model_name, messages, case.max_tokens)
+        message, usage, request_error = _tool_chat_completion(
+            base_url, model_name, messages, case.max_tokens
+        )
+        if request_error is not None:
+            return (
+                latest_response,
+                latest_thinking,
+                trace,
+                model_requests,
+                "request_error",
+                usage_totals,
+                visible_response_tokens,
+                request_error,
+                tool_calls_payloads,
+            )
+        usage_totals["prompt_tokens"] += int(usage.get("prompt_tokens", 0))
+        usage_totals["completion_tokens"] += int(usage.get("completion_tokens", 0))
+        usage_totals["total_tokens"] += int(usage.get("total_tokens", 0))
         response, thinking = _assistant_message_parts(message)
+        latest_response = response
+        latest_thinking = thinking
+        visible_count = count_text_tokens(response, tokenizer_source)
+        visible_response_tokens += visible_count.tokens
         assistant_message = _build_replay_assistant_message(message, response, thinking)
         messages.append(assistant_message)
         tool_calls = message.get("tool_calls") or []
+        tool_calls_payloads.extend(dict(item) for item in tool_calls if isinstance(item, dict))
         if tool_calls:
             for index, tool_call in enumerate(tool_calls, start=1):
                 tool_result = _execute_tool_call(workspace_root, tool_call)
@@ -258,8 +399,28 @@ def _run_workspace_conversation(
                     }
                 )
             continue
-        return response, thinking, trace, model_requests, "final_answer"
-    return "", "", trace, model_requests, "max_turns"
+        return (
+            response,
+            thinking,
+            trace,
+            model_requests,
+            "final_answer",
+            usage_totals,
+            visible_response_tokens,
+            None,
+            tool_calls_payloads,
+        )
+    return (
+        latest_response,
+        latest_thinking,
+        trace,
+        model_requests,
+        "max_turns",
+        usage_totals,
+        visible_response_tokens,
+        None,
+        tool_calls_payloads,
+    )
 
 
 def _build_replay_assistant_message(
@@ -274,12 +435,67 @@ def _build_replay_assistant_message(
     return assistant_message
 
 
+def _build_workspace_token_accounting(
+    *,
+    response_text: str,
+    tool_calls_payloads: list[dict[str, Any]],
+    completion_tokens: int,
+    visible_response_tokens: int,
+    tokenizer_source: str,
+) -> dict[str, Any]:
+    response_count = count_text_tokens(response_text, tokenizer_source)
+    tool_calls_payload = [item for item in tool_calls_payloads if isinstance(item, dict)]
+    tool_call_text = (
+        json.dumps(tool_calls_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        if tool_calls_payload
+        else ""
+    )
+    tool_call_count = (
+        count_text_tokens(tool_call_text, tokenizer_source) if tool_call_text else None
+    )
+    tool_call_tokens = tool_call_count.tokens if tool_call_count is not None else 0
+    thinking_tokens = max(0, completion_tokens - response_count.tokens - tool_call_tokens)
+    exact = not tool_calls_payload and not response_count.fallback_used
+    return {
+        "response_tokens": response_count.tokens,
+        "visible_response_tokens": response_count.tokens,
+        "tool_call_tokens": tool_call_tokens,
+        "thinking_tokens": thinking_tokens,
+        "derived_thinking_tokens": thinking_tokens,
+        "thinking_tokens_exact": exact,
+        "thinking_tokens_source": (
+            "completion_tokens_minus_visible_response_tokens"
+            if exact
+            else "completion_tokens_minus_visible_response_tokens_minus_estimated_tool_call_tokens"
+        ),
+        "tool_call_tokens_exact": exact,
+        "tool_call_tokens_source": "none" if exact else "canonical_tool_calls_json",
+        "tool_call_tokens_estimated": not exact,
+        "response_tokenizer": {
+            "path": response_count.tokenizer_path,
+            "loaded": response_count.loaded,
+            "fallback_used": response_count.fallback_used,
+            "fallback_reason": response_count.fallback_reason,
+        },
+        "tool_call_tokenizer": (
+            None
+            if tool_call_count is None
+            else {
+                "path": tool_call_count.tokenizer_path,
+                "loaded": tool_call_count.loaded,
+                "fallback_used": tool_call_count.fallback_used,
+                "fallback_reason": tool_call_count.fallback_reason,
+            }
+        ),
+    }
+
+
 def _tool_chat_completion(
     base_url: str,
     model_name: str,
     messages: list[dict[str, Any]],
     max_tokens: int,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, int], dict[str, Any] | None]:
     payload = {
         "model": model_name,
         "messages": messages,
@@ -287,11 +503,35 @@ def _tool_chat_completion(
         "max_tokens": max_tokens,
         "tools": WORKSPACE_TOOLS,
         "tool_choice": "auto",
+        "thinking_token_budget": 2048,
     }
-    response = requests.post(f"{base_url}/chat/completions", json=payload, timeout=60)
-    response.raise_for_status()
-    data = response.json()
-    return dict(data["choices"][0]["message"])
+    started_at = time.perf_counter()
+    try:
+        response = requests.post(f"{base_url}/chat/completions", json=payload, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        usage = data.get("usage")
+        usage_payload = {
+            "prompt_tokens": int(usage.get("prompt_tokens", 0)) if isinstance(usage, dict) else 0,
+            "completion_tokens": int(usage.get("completion_tokens", 0))
+            if isinstance(usage, dict)
+            else 0,
+            "total_tokens": int(usage.get("total_tokens", 0)) if isinstance(usage, dict) else 0,
+        }
+        message = dict(data["choices"][0]["message"])
+        return message, usage_payload, None
+    except Exception as exc:  # noqa: BLE001
+        elapsed = time.perf_counter() - started_at
+        return (
+            {},
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            _error_payload(
+                exc,
+                phase="workspace_chat_completion",
+                elapsed_seconds=elapsed,
+                timeout_seconds=60,
+            ),
+        )
 
 
 def _execute_tool_call(workspace_root: Path, tool_call: dict[str, Any]) -> dict[str, Any]:
@@ -355,9 +595,15 @@ def _run_tool(workspace_root: Path, tool_name: str, arguments: dict[str, Any]) -
         if target.is_file():
             entries = [target.name]
         else:
-            entries = [item.name + ("/" if item.is_dir() else "") for item in sorted(target.iterdir())]
+            entries = [
+                item.name + ("/" if item.is_dir() else "") for item in sorted(target.iterdir())
+            ]
         preview = "\n".join(entries)
-        return {"path": str(target.relative_to(workspace_root)), "entries": entries, "preview": preview}
+        return {
+            "path": str(target.relative_to(workspace_root)),
+            "entries": entries,
+            "preview": preview,
+        }
     if tool_name == "read":
         if set(arguments.keys()) != {"path"}:
             raise ValueError("read requires exactly: path")
@@ -438,7 +684,9 @@ def _assistant_message_parts(message: dict[str, Any]) -> tuple[str, str]:
     reasoning = message.get("reasoning_content")
     if reasoning is None:
         reasoning = message.get("reasoning")
-    thinking = reasoning if isinstance(reasoning, str) else "" if reasoning is None else str(reasoning)
+    thinking = (
+        reasoning if isinstance(reasoning, str) else "" if reasoning is None else str(reasoning)
+    )
     return response.strip(), thinking.strip()
 
 
@@ -483,7 +731,9 @@ def _evaluate_workspace_case(
         "update_api_base_url": _score_update_api_base_url,
         "rename_timeout_key_everywhere_needed": _score_rename_timeout_key_everywhere_needed,
         "add_readme_environment_section": _score_add_readme_environment_section,
-        "ambiguous_production_switch_requires_clarification": _score_ambiguous_production_switch_requires_clarification,
+        "ambiguous_production_switch_requires_clarification": (
+            _score_ambiguous_production_switch_requires_clarification
+        ),
     }
     return handlers[case.id](before, after, final_answer, trace, stop_reason)
 
@@ -598,7 +848,8 @@ def _score_rename_timeout_key_everywhere_needed(
         {
             "path": "config/app.toml",
             "status": "pass"
-            if "request_timeout_secs = 45" in config_lines and "timeout_secs = 45" not in config_lines
+            if "request_timeout_secs = 45" in config_lines
+            and "timeout_secs = 45" not in config_lines
             else "fail",
             "check": "config key renamed and value preserved",
         },

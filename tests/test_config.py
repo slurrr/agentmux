@@ -6,7 +6,7 @@ from agentmux.config import list_stacks, resolve_stack
 def test_list_stacks_finds_tracks() -> None:
     stacks = list_stacks(include_archive=True)
     names = {stack.name for stack in stacks}
-    assert "qwen3_5_9b" in names
+    assert "qwen3_5" in names
     assert "example_vllm_recipes" in names
     assert "example_two_service" in names
 

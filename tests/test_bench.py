@@ -3,11 +3,25 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from agentmux.bench import _chat_completion, _chat_completion_parts, _stream_request
+import requests
+
+from agentmux.bench import (
+    ChatCompletionDetails,
+    _chat_completion,
+    _chat_completion_parts,
+    _run_quality_benchmark,
+    _stream_request,
+    _tokenizer_resolution,
+)
 from agentmux.bench_cases import QUALITY_CASES
 from agentmux.bench_judge import JudgeClient, JudgeResult, load_judge_client
 from agentmux.bench_score import evaluate_case
-from agentmux.bench_workspace import _assistant_message_parts, _message_text, _score_rename_timeout_key_everywhere_needed
+from agentmux.bench_workspace import (
+    _assistant_message_parts,
+    _message_text,
+    _score_rename_timeout_key_everywhere_needed,
+)
+from agentmux.config import resolve_stack
 from agentmux.main import main
 
 
@@ -24,8 +38,8 @@ class _BenchHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/plain; version=0.0.4")
             self.end_headers()
             self.wfile.write(
-                b'# HELP vllm:num_requests_running running requests\n'
-                b'vllm:num_requests_running 1\n'
+                b"# HELP vllm:num_requests_running running requests\n"
+                b"vllm:num_requests_running 1\n"
                 b'vllm:gpu_cache_usage_perc{engine="0"} 12.5\n'
             )
             return
@@ -63,7 +77,14 @@ class _BenchHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"choices": [{"message": message}]}).encode("utf-8"))
+        self.wfile.write(
+            json.dumps(
+                {
+                    "choices": [{"message": message}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+                }
+            ).encode("utf-8")
+        )
 
     def log_message(self, format, *args):  # noqa: A003
         return
@@ -135,9 +156,7 @@ def _tool_call(call_id: str, name: str, arguments: dict[str, object]) -> dict[st
 
 def _workspace_response_for_payload(payload: dict[str, object]) -> dict[str, object]:
     messages = payload["messages"]
-    user_prompt = next(
-        message["content"] for message in messages if message.get("role") == "user"
-    )
+    user_prompt = next(message["content"] for message in messages if message.get("role") == "user")
     tool_messages = [message for message in messages if message.get("role") == "tool"]
     if "production endpoint" in user_prompt:
         if not tool_messages:
@@ -240,7 +259,8 @@ def _workspace_response_for_payload(payload: dict[str, object]) -> dict[str, obj
                             "path": "README.md",
                             "content": (
                                 "# Tiny API Service\n\n"
-                                "Run the service locally after setting the required environment variables.\n\n"
+                                "Run the service locally after setting the required environment "
+                                "variables.\n\n"
                                 "## Environment\n\n"
                                 "Set these variables before starting the service.\n\n"
                                 "- API_BASE_URL\n"
@@ -253,7 +273,10 @@ def _workspace_response_for_payload(payload: dict[str, object]) -> dict[str, obj
             }
         return {
             "role": "assistant",
-            "content": "Added an Environment section to README.md listing API_BASE_URL, API_TOKEN, and REQUEST_TIMEOUT_SECS.",
+            "content": (
+                "Added an Environment section to README.md listing API_BASE_URL, "
+                "API_TOKEN, and REQUEST_TIMEOUT_SECS."
+            ),
         }
     if "switch the API base URL to production in the config" in user_prompt:
         return {
@@ -315,21 +338,92 @@ def test_stream_request_ignores_reasoning_stream_output() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        metrics = _stream_request(
+        outcome = _stream_request(
             f"http://127.0.0.1:{server.server_port}/v1",
             "bench-model",
             "Say hi",
             0,
             20,
         )
-        assert metrics.client_observed_time_to_first_stream_event_seconds >= 0.0
-        assert metrics.output_tokens == 3
-        assert metrics.response_text == ""
-        assert metrics.stream_fields_seen == ()
+        assert outcome.ok is True
+        assert outcome.metrics is not None
+        assert outcome.metrics.client_observed_time_to_first_stream_event_seconds >= 0.0
+        assert outcome.metrics.output_tokens == 3
+        assert outcome.metrics.response_text == ""
+        assert outcome.metrics.stream_fields_seen == ()
     finally:
         server.shutdown()
         server.server_close()
 
+
+def test_stream_request_timeout_becomes_failed_outcome(monkeypatch) -> None:
+    def fake_post(*args, **kwargs):
+        raise requests.ReadTimeout("timed out")
+
+    monkeypatch.setattr("agentmux.bench.requests.post", fake_post)
+
+    outcome = _stream_request("http://example/v1", "model", "Say hi", 0, 20)
+
+    assert outcome.ok is False
+    assert outcome.metrics is None
+    assert outcome.error is not None
+    assert outcome.error["phase"] == "stream_request"
+    assert outcome.error["timeout_seconds"] == 60
+
+
+def test_quality_benchmark_continues_after_request_failure(monkeypatch) -> None:
+    calls = {"count": 0}
+
+    def fake_chat(base_url: str, model_name: str, prompt: str, max_tokens: int):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return ChatCompletionDetails(
+                response_text="",
+                thinking_text="",
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                tool_calls=(),
+                request_error={
+                    "phase": "chat_completion",
+                    "error_type": "ReadTimeout",
+                    "message": "timed out",
+                    "elapsed_seconds": 0.1,
+                    "timeout_seconds": 60,
+                },
+                elapsed_seconds=0.1,
+            )
+        return ChatCompletionDetails(
+            response_text=_response_for_prompt(prompt),
+            thinking_text="",
+            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            tool_calls=(),
+            elapsed_seconds=0.1,
+        )
+
+    monkeypatch.setattr("agentmux.bench._chat_completion_details", fake_chat)
+
+    judge = JudgeClient(
+        enabled=False,
+        provider="none",
+        model="none",
+        auth_source="/dev/null",
+        base_url="http://localhost",
+    )
+    results = _run_quality_benchmark("http://example/v1", "model", judge, "/missing/tokenizer")
+
+    assert len(results) == len(QUALITY_CASES)
+    assert results[0]["status"] == "failed"
+    assert results[0]["failure"]["error_type"] == "ReadTimeout"
+    assert any(item["status"] == "ok" for item in results[1:])
+
+
+def test_tokenizer_resolution_prefers_explicit_asset() -> None:
+    stack = resolve_stack("example_vllm_recipes")
+    service = stack.services["generalist"]
+
+    resolution = _tokenizer_resolution(service, service.served_model_name or service.model)
+
+    assert resolution["path"] == service.assets.values["tokenizer"]
+    assert resolution["source"] == "service.assets.tokenizer"
 
 
 def test_workspace_message_text_uses_raw_content_and_reasoning_fields() -> None:
@@ -338,9 +432,10 @@ def test_workspace_message_text_uses_raw_content_and_reasoning_fields() -> None:
     assert _assistant_message_parts(
         {"content": "answer", "reasoning_content": "thinking aloud"}
     ) == ("answer", "thinking aloud")
-    assert _assistant_message_parts(
-        {"content": None, "reasoning_content": "thinking aloud"}
-    ) == ("", "thinking aloud")
+    assert _assistant_message_parts({"content": None, "reasoning_content": "thinking aloud"}) == (
+        "",
+        "thinking aloud",
+    )
 
 
 def test_chat_completion_uses_reasoning_when_content_is_empty(monkeypatch) -> None:
@@ -375,13 +470,25 @@ def test_chat_completion_uses_reasoning_when_content_is_empty(monkeypatch) -> No
 def test_rename_timeout_score_ignores_request_substring() -> None:
     before = {
         "config/app.toml": '[service]\nname = "web-api"\ntimeout_secs = 45\napi_base_url = "https://api.example.com/v1"\n',
-        "docs/config.md": '# Config\n\n- `timeout_secs`: request timeout in seconds.\n- `api_base_url`: upstream API base URL.\n',
+        "docs/config.md": (
+            "# Config\n\n- `timeout_secs`: request timeout in seconds.\n- "
+            "`api_base_url`: upstream API base URL.\n"
+        ),
     }
     after = {
         "config/app.toml": '[service]\nname = "web-api"\nrequest_timeout_secs = 45\napi_base_url = "https://api.example.com/v1"\n',
-        "docs/config.md": '# Config\n\n- `request_timeout_secs`: request timeout in seconds.\n- `api_base_url`: upstream API base URL.\n',
+        "docs/config.md": (
+            "# Config\n\n- `request_timeout_secs`: request timeout in seconds.\n- "
+            "`api_base_url`: upstream API base URL.\n"
+        ),
     }
-    result = _score_rename_timeout_key_everywhere_needed(before, after, "updated both files", [], "final_answer")
+    result = _score_rename_timeout_key_everywhere_needed(
+        before,
+        after,
+        "updated both files",
+        [],
+        "final_answer",
+    )
     assert result["deterministic_failures"] == []
     assert result["file_checks"][0]["status"] == "pass"
     assert result["file_checks"][1]["status"] == "pass"
@@ -408,7 +515,6 @@ class _FakeCompletedProcess:
         self.stderr = stderr
 
 
-
 def test_judge_client_uses_single_batched_pi_cli_call(monkeypatch) -> None:
     calls = []
 
@@ -428,11 +534,11 @@ def test_judge_client_uses_single_batched_pi_cli_call(monkeypatch) -> None:
             ]
         }
         return _FakeCompletedProcess(
-            '\n'.join(
+            "\n".join(
                 [
                     '{"type":"session"}',
                     '{"type":"message_end","message":{"role":"assistant","content":['
-                    '{"type":"text","text":' + json.dumps(json.dumps(payload)) + '}]}}',
+                    '{"type":"text","text":' + json.dumps(json.dumps(payload)) + "}]}}",
                 ]
             )
         )
@@ -462,7 +568,6 @@ def test_judge_client_uses_single_batched_pi_cli_call(monkeypatch) -> None:
     assert len(calls) == 1
     assert result["case"].deterministic_score_fit == "fair"
     assert result["case"].quality_note == "response was concise and useful"
-
 
 
 def test_all_quality_cases_are_judge_enabled() -> None:
@@ -551,8 +656,7 @@ def test_judge_receives_deterministic_context_without_owning_score() -> None:
     assert result.judge["deterministic_score_fit"] == "too_harsh"
     assert result.judge["deterministic_notes"] == ["one length miss should not zero the case"]
     assert (
-        result.judge["quality_note"]
-        == "failed deterministically but response was otherwise good"
+        result.judge["quality_note"] == "failed deterministically but response was otherwise good"
     )
     assert judge.calls[0][2] == "bounded_structured_summary"
     assert judge.calls[0][3]["score"] == 0.0
