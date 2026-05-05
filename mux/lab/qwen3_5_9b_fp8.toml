@@ -1,5 +1,5 @@
 [stack]
-name = "qwen3_5"
+name = "qwen3_5_fp8"
 track = "lab"
 primary_service = "llm"
 notes = "Minimal tool-capable Qwen3.5 multi-modal-model."
@@ -16,9 +16,9 @@ max_num_seqs = 10
 [services.llm]
 engine = "vllm"
 runtime_bin_dir = ".venv-vllm/bin"
-model = "${MODEL_ROOT}/quants/llm-compressor-artifacts/qwen3.5-9b-fp8-block"
+model = "${QUANT_ROOT}/llm-compressor-artifacts/qwen3.5-9b-fp8-block"
 port = 8002
-served_model_name = "qwen3.5-9b"
+served_model_name = "qwen3.5_9b"
 # extra_args = ["--disable-log-requests"]
 
 [services.llm.env]
@@ -27,7 +27,7 @@ PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
 
 [services.llm.args]
 enable_prefix_caching = true
-max_model_len = 73728
+max_model_len = 135168
 enable_auto_tool_choice = true
 tool_call_parser = "qwen3_xml"
 reasoning_parser = "qwen3"
@@ -35,19 +35,16 @@ exclude_tools_when_tool_choice_none = true
 # performance_mode = "interactivity"
 enable-force-include-usage = true
 chat_template_content_format = "openai"
-default_chat_template_kwargs = "{\"enable_thinking\":true}"
-# trust_request_chat_template = false
+# default_chat_template_kwargs = "{\"enable_thinking\":true}"
 # generation_config = "auto"
 # kv_cache_memory_bytes = "10466787727"
 kv_cache_dtype = "fp8_e4m3"
+# does not work with qwen's hybrid attention (works with omnicoder fp8 i think)
+# calculate_kv_scales = true 
 
-# calculate_kv_scales = true *does not work with qwen's hybrid attention (works with omnicoder i think)
+
 # limit_mm_per_prompt = "{\"image\":1}"
 # language_model_only = true
 
-# swap_space = 0
-# structured_outputs_config = "{\"backend\":\"auto\"}"
-# tool_server = "http://127.0.0.1:9000"
-
 [services.llm.assets]
-chat_template = "assets/chat_templates/qwen3_codex_compat.jinja"
+chat_template = "assets/chat_templates/qwen3.5_hf_fix_chat_template.jinja"

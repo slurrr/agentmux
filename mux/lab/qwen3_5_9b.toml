@@ -18,7 +18,7 @@ engine = "vllm"
 runtime_bin_dir = ".venv-vllm/bin"
 model = "${MODEL_ROOT}/hf-snapshots/qwen3.5-9b/current"
 port = 8002
-served_model_name = "qwen3.5-9b"
+served_model_name = "qwen3.5_9b"
 # extra_args = ["--disable-log-requests"]
 
 [services.llm.env]

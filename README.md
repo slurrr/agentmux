@@ -36,8 +36,12 @@ This repo exists to:
 
 ## Setup
 ```bash
-uv sync
-uv pip install vllm --torch-backend=auto
+uv venv .venv-vllm
+uv pip install --python .venv-vllm/bin/python -e '.[dev]'
+uv pip install --python .venv-vllm/bin/python 'vllm==0.20.0'
+
+uv venv .venv-hindsight
+uv pip install --python .venv-hindsight/bin/python 'hindsight-all==0.5.6' pg0-embedded
 ```
 
 ## Stack Layout
@@ -48,17 +52,17 @@ uv pip install vllm --torch-backend=auto
 
 ## Common Commands
 ```bash
-uv run agentmux list --include-archive
-uv run agentmux show qwen3_5_9b
-uv run agentmux render qwen3_5_9b
-uv run agentmux up qwen3_5_9b --dry-run
-uv run agentmux status
-uv run agentmux smoke qwen3_5_9b --json
-uv run agentmux history
+.venv-vllm/bin/agentmux list --include-archive
+.venv-vllm/bin/agentmux show qwen3_5_9b
+.venv-vllm/bin/agentmux render qwen3_5_9b
+.venv-vllm/bin/agentmux up qwen3_5_9b --dry-run
+.venv-vllm/bin/agentmux status
+.venv-vllm/bin/agentmux smoke qwen3_5_9b --json
+.venv-vllm/bin/agentmux history
 ```
 
 ## Runtime Model
-- `agentmux` launches real `uv run vllm serve ...` commands
+- `agentmux` launches real vLLM and Hindsight executables from their service-specific envs
 - `vllm` owns serving and logs
 - `agentmux` keeps thin runtime metadata under `~/runs/agentmux/`
 - `.env` is loaded automatically before rendering or launching

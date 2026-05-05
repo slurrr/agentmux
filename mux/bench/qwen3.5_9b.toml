@@ -35,6 +35,8 @@ exclude_tools_when_tool_choice_none = true
 enable-force-include-usage = true
 chat_template_content_format = "openai"
 # default_chat_template_kwargs = "{\"enable_thinking\":false}"
+# avoid deliberation loops (from google DR) no noticeable difference when turn time was 40 sec
+# default-chat-template-kwargs = "{\"preserve_thinking\": false}"
 # kv_cache_dtype = "fp8_e4m3"
 # attention_backend = "FLASHINFER"
 

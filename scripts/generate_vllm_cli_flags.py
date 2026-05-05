@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-VENV_SITE = ROOT / ".venv" / "lib"
+VENV_SITE = ROOT / ".venv-vllm" / "lib"
 if VENV_SITE.exists():
     for candidate in sorted(VENV_SITE.glob("python*/site-packages")):
         sys.path.insert(0, str(candidate))
@@ -249,7 +249,7 @@ def render_markdown() -> str:
     lines.append(f"- Repo: `{ROOT}`")
     lines.append(f"- Python: `{sys.version.split()[0]}`")
     lines.append(f"- vLLM: `{importlib.metadata.version('vllm')}`")
-    lines.append(f"- vLLM entrypoint: `{ROOT / '.venv' / 'bin' / 'vllm'}`")
+    lines.append(f"- vLLM entrypoint: `{ROOT / '.venv-vllm' / 'bin' / 'vllm'}`")
     lines.append(f"- Host: `{platform.platform()}`")
     lines.append(
         "- Probe mode: force `vllm.platforms.current_platform = CpuPlatform()` before parser construction so help can be introspected on this host."

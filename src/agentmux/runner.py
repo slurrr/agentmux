@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import signal
+import sys
 import socket
 import subprocess
 import time
@@ -71,8 +72,15 @@ def _resolve_runtime_bin_dir(runtime_bin_dir: str | None) -> Path | None:
     return path.resolve()
 
 
-def _venv_site_packages_dir() -> Path | None:
-    lib_root = _repo_root() / ".venv" / "lib"
+def _site_packages_dir_for_runtime(runtime_bin_dir: str | None) -> Path | None:
+    if runtime_bin_dir is None:
+        prefix = Path(sys.prefix)
+    else:
+        resolved_bin_dir = _resolve_runtime_bin_dir(runtime_bin_dir)
+        if resolved_bin_dir is None:
+            return None
+        prefix = resolved_bin_dir.parent
+    lib_root = prefix / "lib"
     if not lib_root.is_dir():
         return None
     candidates = sorted(lib_root.glob("python*/site-packages"))
@@ -81,9 +89,23 @@ def _venv_site_packages_dir() -> Path | None:
     return candidates[-1]
 
 
-def _runtime_env() -> dict[str, str]:
+def _without_repo_venv_paths(paths: list[str]) -> list[str]:
+    legacy_bin = str(_repo_root() / ".venv" / "bin")
+    legacy_lib = str(_repo_root() / ".venv" / "lib")
+    cleaned: list[str] = []
+    for path in paths:
+        if not path:
+            continue
+        if path == legacy_bin or path.startswith(f"{legacy_lib}/") or path == legacy_lib:
+            continue
+        cleaned.append(path)
+    return cleaned
+
+
+def _runtime_env(runtime_bin_dir: str | None = None) -> dict[str, str]:
     env = os.environ.copy()
-    site_packages = _venv_site_packages_dir()
+    resolved_bin_dir = _resolve_runtime_bin_dir(runtime_bin_dir)
+    site_packages = _site_packages_dir_for_runtime(runtime_bin_dir)
     cuda_home: Path | None = None
     for candidate in (Path("/usr/local/cuda"), Path("/usr/local/cuda-13.2")):
         if candidate.is_dir():
@@ -98,9 +120,25 @@ def _runtime_env() -> dict[str, str]:
         if gcc14.is_file():
             env.setdefault("NVCC_CCBIN", str(gcc14))
         current_path = env.get("PATH", "")
-        path_parts = [str(cuda_home / "bin")]
+        path_parts: list[str] = []
+        if resolved_bin_dir is not None:
+            path_parts.append(str(resolved_bin_dir))
+        path_parts.append(str(cuda_home / "bin"))
         if current_path:
-            path_parts.extend(part for part in current_path.split(":") if part)
+            path_parts.extend(_without_repo_venv_paths(current_path.split(":")))
+        deduped_path: list[str] = []
+        seen_path: set[str] = set()
+        for path in path_parts:
+            if path and path not in seen_path:
+                deduped_path.append(path)
+                seen_path.add(path)
+        env["PATH"] = ":".join(deduped_path)
+
+    if resolved_bin_dir is not None:
+        current_path = env.get("PATH", "")
+        path_parts = [str(resolved_bin_dir)]
+        if current_path:
+            path_parts.extend(_without_repo_venv_paths(current_path.split(":")))
         deduped_path: list[str] = []
         seen_path: set[str] = set()
         for path in path_parts:
@@ -127,7 +165,7 @@ def _runtime_env() -> dict[str, str]:
 
     current = env.get("LD_LIBRARY_PATH", "")
     if current:
-        lib_dirs.extend(part for part in current.split(":") if part)
+        lib_dirs.extend(_without_repo_venv_paths(current.split(":")))
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -320,11 +358,10 @@ def build_stack_plan(
     stack = resolve_stack(stack_name, root=root, include_archive=include_archive)
 
     services: list[ServiceLaunchPlan] = []
-    base_env = _runtime_env()
-    base_env.update(stack.env)
 
     for service_name, service in stack.services.items():
-        env = dict(base_env)
+        env = _runtime_env(service.runtime_bin_dir)
+        env.update(stack.env)
         env.update(service.env)
 
         if service.engine == "vllm":
