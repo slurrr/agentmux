@@ -17,8 +17,10 @@ from agentmux.bench_cases import QUALITY_CASES
 from agentmux.bench_judge import JudgeClient, JudgeResult, load_judge_client
 from agentmux.bench_score import evaluate_case
 from agentmux.bench_workspace import (
+    WORKSPACE_CASES,
     _assistant_message_parts,
     _message_text,
+    _run_workspace_case,
     _score_rename_timeout_key_everywhere_needed,
 )
 from agentmux.config import resolve_stack
@@ -492,6 +494,31 @@ def test_rename_timeout_score_ignores_request_substring() -> None:
     assert result["deterministic_failures"] == []
     assert result["file_checks"][0]["status"] == "pass"
     assert result["file_checks"][1]["status"] == "pass"
+
+
+def test_workspace_incomplete_conversation_still_reports_file_checks(monkeypatch) -> None:
+    case = next(item for item in WORKSPACE_CASES if item.id == "update_api_base_url")
+
+    def fake_conversation(*args, **kwargs):
+        return (
+            "",
+            "",
+            [],
+            1,
+            "max_turns",
+            {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            0,
+            None,
+            [],
+        )
+
+    monkeypatch.setattr("agentmux.bench_workspace._run_workspace_conversation", fake_conversation)
+
+    result = _run_workspace_case(case, "http://example/v1", "model", "/missing/tokenizer")
+
+    assert result["passed"] is False
+    assert result["workspace"]["conversation_stop_reason"] == "max_turns"
+    assert result["workspace"]["file_checks"]
 
 
 def test_load_judge_client_uses_pi_cli_provider(tmp_path: Path, monkeypatch) -> None:

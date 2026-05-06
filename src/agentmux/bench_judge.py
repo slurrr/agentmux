@@ -133,35 +133,11 @@ def _judge_system_prompt() -> str:
 
 
 def _run_pi_judge_many(*, model: str, cases: list[dict[str, Any]]) -> str:
-    pi_command = os.environ.get("AGENTMUX_BENCH_JUDGE_PI_COMMAND", DEFAULT_PI_COMMAND)
-    invocation = shlex.split(pi_command)
-    if not invocation:
-        raise ValueError("Empty AGENTMUX_BENCH_JUDGE_PI_COMMAND")
-    judge_prompt = _judge_user_content_many(cases)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
-        handle.write(_judge_system_prompt())
-        system_prompt_path = handle.name
-    try:
-        args = [
-            *invocation,
-            "--mode",
-            "json",
-            "-p",
-            "--no-session",
-            "--provider",
-            "openai-codex",
-            "--model",
-            model,
-            "--append-system-prompt",
-            system_prompt_path,
-            judge_prompt,
-        ]
-        result = subprocess.run(args, capture_output=True, text=True, timeout=90, check=False)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or f"pi exited with code {result.returncode}")
-        return _extract_pi_assistant_text(result.stdout)
-    finally:
-        Path(system_prompt_path).unlink(missing_ok=True)
+    return _run_pi_with_prompt(
+        model=model,
+        system_prompt=_judge_system_prompt(),
+        user_content=_judge_user_content_many(cases),
+    )
 
 
 def _extract_pi_assistant_text(stdout: str) -> str:
@@ -190,6 +166,56 @@ def _extract_pi_assistant_text(stdout: str) -> str:
         if merged:
             return merged
     raise ValueError("No assistant text found in pi output")
+
+
+def run_judge_audit(cases: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
+    if not cases:
+        return []
+    prompt = (
+        "For each case, restate user intent in 1 line, then say if response actually fulfills it. "
+        "Flag if technically correct but unhelpful. Quote the response fragment causing failure. "
+        "Return JSON only as an array with keys: case_id, intent, fulfills_intent, "
+        "technically_correct_but_unhelpful, flag, quote, note."
+    )
+    payload = json.dumps({"cases": cases}, indent=2, sort_keys=True)
+    content = _run_pi_with_prompt(model=model, system_prompt=prompt, user_content=payload)
+    parsed = _extract_json_object(content)
+    if isinstance(parsed, list):
+        return [item for item in parsed if isinstance(item, dict)]
+    if isinstance(parsed, dict) and isinstance(parsed.get("cases"), list):
+        return [item for item in parsed["cases"] if isinstance(item, dict)]
+    return []
+
+
+def _run_pi_with_prompt(*, model: str, system_prompt: str, user_content: str) -> str:
+    pi_command = os.environ.get("AGENTMUX_BENCH_JUDGE_PI_COMMAND", DEFAULT_PI_COMMAND)
+    invocation = shlex.split(pi_command)
+    if not invocation:
+        raise ValueError("Empty AGENTMUX_BENCH_JUDGE_PI_COMMAND")
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+        handle.write(system_prompt)
+        system_prompt_path = handle.name
+    try:
+        args = [
+            *invocation,
+            "--mode",
+            "json",
+            "-p",
+            "--no-session",
+            "--provider",
+            "openai-codex",
+            "--model",
+            model,
+            "--append-system-prompt",
+            system_prompt_path,
+            user_content,
+        ]
+        result = subprocess.run(args, capture_output=True, text=True, timeout=90, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or f"pi exited with code {result.returncode}")
+        return _extract_pi_assistant_text(result.stdout)
+    finally:
+        Path(system_prompt_path).unlink(missing_ok=True)
 
 
 def load_judge_client() -> JudgeClient:

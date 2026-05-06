@@ -60,8 +60,8 @@ def evaluate_case(case: QualityCase, response: str, judge_client: JudgeClient) -
     deterministic_context = {
         "score": evaluation.score,
         "deterministic_failures": evaluation.deterministic_failures,
-        "rubric_passes": evaluation.rubric_passes,
-        "rubric_failures": evaluation.rubric_failures,
+        "rubric_passes": [],
+        "rubric_failures": [],
         "reliability_flags": evaluation.reliability_flags,
     }
     if case.default_judge_enabled:
@@ -82,8 +82,8 @@ def evaluate_case(case: QualityCase, response: str, judge_client: JudgeClient) -
         score=score,
         passed=score >= 0.75,
         deterministic_failures=evaluation.deterministic_failures,
-        rubric_passes=evaluation.rubric_passes,
-        rubric_failures=evaluation.rubric_failures,
+        rubric_passes=[],
+        rubric_failures=[],
         reliability_flags=evaluation.reliability_flags,
         judge=judge_payload,
     )
@@ -208,14 +208,10 @@ def _make_result(
     rubric_failures: list[str],
     reliability_flags: dict[str, bool],
 ) -> CaseEvaluation:
-    if deterministic_failures:
-        score = 0.0
-    else:
-        total = len(rubric_passes) + len(rubric_failures)
-        score = 1.0 if total == 0 else len(rubric_passes) / total
+    score = 0.0 if deterministic_failures else 1.0
     return CaseEvaluation(
         score=round(score, 3),
-        passed=not deterministic_failures and not rubric_failures,
+        passed=not deterministic_failures,
         deterministic_failures=deterministic_failures,
         rubric_passes=rubric_passes,
         rubric_failures=rubric_failures,

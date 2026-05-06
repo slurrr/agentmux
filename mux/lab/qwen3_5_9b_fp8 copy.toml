@@ -1,5 +1,5 @@
 [stack]
-name = "qwen3_5_fp8"
+name = "qwen3_5_fp8dkv"
 track = "lab"
 primary_service = "llm"
 notes = "Minimal tool-capable Qwen3.5 multi-modal-model."
@@ -11,12 +11,12 @@ notes = "Minimal tool-capable Qwen3.5 multi-modal-model."
 dtype = "bfloat16"
 load_format = "auto"
 gpu_memory_utilization = 0.98
-max_num_seqs = 10
+# max_num_seqs = 10
 
 [services.llm]
 engine = "vllm"
 runtime_bin_dir = ".venv-vllm/bin"
-model = "${QUANT_ROOT}/llm-compressor-artifacts/qwen3.5-9b-fp8-block"
+model = "${QUANT_ROOT}/llm-compressor-artifacts/Qwen3.5-9B-FP8-DYNAMIC-KV-v2"
 port = 8002
 served_model_name = "qwen3.5_9b"
 # extra_args = ["--disable-log-requests"]
@@ -27,15 +27,14 @@ PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
 
 [services.llm.args]
 enable_prefix_caching = true
-max_model_len = 8192
-generation_config = "vllm"
-gpu_memory_utilization = 0.98
+max_model_len = 135168
 enable_auto_tool_choice = true
 tool_call_parser = "qwen3_xml"
 reasoning_parser = "qwen3"
 exclude_tools_when_tool_choice_none = true
+# performance_mode = "interactivity"
 enable-force-include-usage = true
-chat_template_content_format = "openai"
+# chat_template_content_format = "openai"
 # default_chat_template_kwargs = "{\"enable_thinking\":true}"
 # generation_config = "auto"
 # kv_cache_memory_bytes = "10466787727"

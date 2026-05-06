@@ -1,5 +1,5 @@
 [stack]
-name = "qwen3_5-fp8-bench"
+name = "qwen3_5-fp8d-bench"
 track = "bench"
 primary_service = "main"
 notes = "qwen3.5_9b with fp8 block selective weights"
@@ -12,7 +12,7 @@ max_num_seqs = 10
 [services.main]
 engine = "vllm"
 runtime_bin_dir = ".venv-vllm/bin"
-model = "${QUANT_ROOT}/llm-compressor-artifacts/qwen3.5-9b-fp8-block"
+model = "${QUANT_ROOT}/llm-compressor-artifacts/qwen3.5-9b-fp8-dynamic"
 served_model_name = "qwen3.5_9b_fp8"
 host = "127.0.0.1"
 port = 8100

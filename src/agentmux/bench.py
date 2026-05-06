@@ -22,7 +22,8 @@ from agentmux.bench_cases import (
     QUALITY_CASES,
     SERVING_PROMPTS,
 )
-from agentmux.bench_judge import JudgeClient, load_judge_client
+from agentmux.bench_judge import JudgeClient, load_judge_client, run_judge_audit
+from agentmux.bench_perf_vllm import run_vllm_endpoint_perf
 from agentmux.bench_report import render_summary, write_result
 from agentmux.bench_score import build_reliability_summary, evaluate_case, verdict_summary
 from agentmux.bench_tokens import TokenCountResult, count_text_tokens
@@ -205,6 +206,8 @@ def run_benchmark(
     *,
     target_mode: str = "already_running",
     launch_observation: dict[str, Any] | None = None,
+    judge_audit: bool = False,
+    enable_perf: bool = True,
 ) -> tuple[dict[str, Any], Path, str]:
     stack = resolve_stack(stack_name, root=root)
     service = stack.services[stack.primary_service]
@@ -224,7 +227,22 @@ def run_benchmark(
     sampler = _PrometheusSampler(base_url)
     sampler.start()
     try:
-        serving = _run_serving_benchmark(base_url, model_name, tokenizer_source)
+        perf = run_vllm_endpoint_perf(
+            stack_name=stack.name,
+            base_url=base_url,
+            model_name=(service.served_model_name or model_name),
+            tokenizer_path=tokenizer_source,
+            enabled=enable_perf,
+        )
+        serving = {
+            "aggregate": {
+                "request_counts": {
+                    "serving_requests": 0,
+                    "serving_cells": 0,
+                    "failed_requests": 0,
+                }
+            }
+        }
     finally:
         metrics_during_serving = sampler.stop()
     metrics_after_serving = _capture_metrics_snapshot(base_url)
@@ -282,6 +300,30 @@ def run_benchmark(
     serving_failures = int(
         serving.get("aggregate", {}).get("request_counts", {}).get("failed_requests", 0)
     )
+
+    audit_payload: dict[str, Any] | None = None
+    if judge_audit and judge_client.enabled:
+        audit_cases = [
+            {
+                "case_id": str(item.get("id", "")),
+                "group": str(item.get("group", "")),
+                "prompt": str(item.get("prompt", "")),
+                "response": str(item.get("response", "")),
+                "passed": bool(item.get("passed", False)),
+                "deterministic_failures": list(item.get("deterministic_failures") or []),
+            }
+            for item in case_results
+            if item.get("group") != "quality_with_tools" and item.get("kind") != "workspace"
+        ]
+        try:
+            review = run_judge_audit(audit_cases, judge_client.model)
+        except Exception:
+            review = []
+        audit_payload = {
+            "judge_prompt_version": "audit-v1",
+            "judge_review": review,
+        }
+
     result = {
         "benchmark_version": PROFILE_VERSION,
         "profile": PROFILE_NAME,
@@ -333,7 +375,9 @@ def run_benchmark(
                 "reliability": asdict(reliability),
             },
         },
+        "perf": perf,
         "cases": case_results,
+        "audit": audit_payload,
         "request_accounting": {
             "local_serving_requests": serving["aggregate"]["request_counts"]["serving_requests"],
             "local_serving_cells": serving["aggregate"]["request_counts"]["serving_cells"],
@@ -400,151 +444,161 @@ def _runtime_log_path(stack_name: str, primary_service: str) -> str | None:
     return None
 
 
+def _percentile(values: list[float], pct: float) -> float | None:
+    if not values:
+        return None
+    if len(values) == 1:
+        return round(values[0], 4)
+    ordered = sorted(values)
+    idx = max(0, min(len(ordered) - 1, int(round((pct / 100.0) * (len(ordered) - 1)))))
+    return round(ordered[idx], 4)
+
+
+def _run_stream_batch(
+    *,
+    base_url: str,
+    model_name: str,
+    prompt: str,
+    max_tokens: int,
+    total_requests: int,
+    concurrency: int,
+) -> list[RequestOutcome]:
+    outcomes: list[RequestOutcome] = []
+    remaining = total_requests
+    while remaining > 0:
+        wave = min(concurrency, remaining)
+        outcomes.extend(
+            _run_concurrent_streams(
+                base_url=base_url,
+                model_name=model_name,
+                prompt=prompt,
+                temperature=0.0,
+                max_tokens=max_tokens,
+                concurrency=wave,
+            )
+        )
+        remaining -= wave
+    return outcomes
+
+
 def _run_serving_benchmark(
     base_url: str,
     model_name: str,
     tokenizer_source: str,
 ) -> dict[str, Any]:
-    prompt_results: list[dict[str, Any]] = []
-    summary_by_concurrency: dict[str, dict[str, Any]] = {}
-    all_successes: list[RequestMetrics] = []
-    all_failures: list[dict[str, Any]] = []
-    first_request_metric: RequestMetrics | None = None
-    for concurrency in SERVING_CONCURRENCY_LEVELS:
-        concurrency_successes: list[RequestMetrics] = []
-        concurrency_failures: list[dict[str, Any]] = []
-        for prompt in SERVING_PROMPTS:
-            outcomes = _run_concurrent_streams(
-                base_url=base_url,
-                model_name=model_name,
-                prompt=prompt.prompt,
-                temperature=prompt.temperature,
-                max_tokens=prompt.max_tokens,
-                concurrency=concurrency,
-            )
-            prompt_successes = [
-                outcome.metrics for outcome in outcomes if outcome.ok and outcome.metrics
-            ]
-            prompt_failures = [
-                outcome.error for outcome in outcomes if not outcome.ok and outcome.error
-            ]
-            if first_request_metric is None and prompt_successes:
-                first_request_metric = prompt_successes[0]
-            concurrency_successes.extend(prompt_successes)
-            concurrency_failures.extend(prompt_failures)
-            all_successes.extend(prompt_successes)
-            all_failures.extend(prompt_failures)
-            prompt_results.append(
-                {
-                    "prompt_id": prompt.id,
-                    "concurrency": concurrency,
-                    "source": "client_observed",
-                    "status": "ok" if prompt_successes else "failed",
-                    "successful_requests": len(prompt_successes),
-                    "failed_requests": len(prompt_failures),
-                    "avg_request_wall_time_seconds": _safe_mean(
-                        [
-                            item.client_observed_request_wall_time_seconds
-                            for item in prompt_successes
-                        ]
-                    ),
-                    "avg_time_to_first_stream_event_seconds": _safe_mean(
-                        [
-                            item.client_observed_time_to_first_stream_event_seconds
-                            for item in prompt_successes
-                        ]
-                    ),
-                    "avg_output_tokens_per_second": _safe_mean(
-                        [item.client_observed_output_tokens_per_second for item in prompt_successes]
-                    ),
-                    "stream_field_counts": _stream_field_counts(prompt_successes),
-                    "failures": prompt_failures,
-                }
-            )
-        summary_by_concurrency[str(concurrency)] = {
-            "source": "client_observed",
-            "status": "ok" if concurrency_successes else "failed",
-            "successful_requests": len(concurrency_successes),
-            "failed_requests": len(concurrency_failures),
-            "avg_request_wall_time_seconds": _safe_mean(
-                [item.client_observed_request_wall_time_seconds for item in concurrency_successes]
-            ),
-            "avg_time_to_first_stream_event_seconds": _safe_mean(
-                [
-                    item.client_observed_time_to_first_stream_event_seconds
-                    for item in concurrency_successes
-                ]
-            ),
-            "avg_output_tokens_per_second": _safe_mean(
-                [item.client_observed_output_tokens_per_second for item in concurrency_successes]
-            ),
+    lane_a_prompt = SERVING_PROMPTS[0].prompt
+    lane_b_prompt = SERVING_PROMPTS[1].prompt
+
+    lane_a_outcomes = _run_stream_batch(
+        base_url=base_url,
+        model_name=model_name,
+        prompt=lane_a_prompt,
+        max_tokens=512,
+        total_requests=12,
+        concurrency=1,
+    )
+    lane_a_successes = [o.metrics for o in lane_a_outcomes if o.ok and o.metrics]
+    lane_a_failures = [o.error for o in lane_a_outcomes if (not o.ok and o.error)]
+
+    lane_b_results: dict[str, Any] = {}
+    lane_b_all_successes: list[RequestMetrics] = []
+    lane_b_all_failures: list[dict[str, Any]] = []
+    for concurrency in (2, 4, 8, 16):
+        outcomes = _run_stream_batch(
+            base_url=base_url,
+            model_name=model_name,
+            prompt=lane_b_prompt,
+            max_tokens=2048,
+            total_requests=12,
+            concurrency=concurrency,
+        )
+        successes = [o.metrics for o in outcomes if o.ok and o.metrics]
+        failures = [o.error for o in outcomes if (not o.ok and o.error)]
+        lane_b_all_successes.extend(successes)
+        lane_b_all_failures.extend(failures)
+        throughput = sum(item.output_tokens for item in successes) / max(
+            1e-6,
+            sum(item.client_observed_request_wall_time_seconds for item in successes),
+        )
+        ttft = [item.client_observed_time_to_first_stream_event_seconds for item in successes]
+        lane_b_results[str(concurrency)] = {
+            "concurrency": concurrency,
+            "requests": 12,
+            "successful_requests": len(successes),
+            "failed_requests": len(failures),
+            "error_rate": round(len(failures) / 12.0, 4),
+            "aggregate_throughput_tokens_per_second": round(throughput, 4),
+            "ttft_p95_seconds": _percentile(ttft, 95),
         }
-    one_tps = summary_by_concurrency.get("1", {}).get("avg_output_tokens_per_second")
-    four_tps = summary_by_concurrency.get("4", {}).get("avg_output_tokens_per_second")
+
+    lane_a_ttft = [item.client_observed_time_to_first_stream_event_seconds for item in lane_a_successes]
+    lane_a_latency = [item.client_observed_request_wall_time_seconds for item in lane_a_successes]
+    lane_a_tps = [item.client_observed_output_tokens_per_second for item in lane_a_successes]
+
+    ttft_p95_at_1 = _percentile(lane_a_ttft, 95) or 0.0
+    ttft_p95_at_16 = float(lane_b_results.get("16", {}).get("ttft_p95_seconds") or 0.0)
+    degradation_ratio = round(ttft_p95_at_16 / ttft_p95_at_1, 4) if ttft_p95_at_1 > 0 else None
+
+    one_tps = lane_b_results.get("2", {}).get("aggregate_throughput_tokens_per_second")
+    four_tps = lane_b_results.get("4", {}).get("aggregate_throughput_tokens_per_second")
     efficiency = 0.0
-    if isinstance(one_tps, (int, float)) and isinstance(four_tps, (int, float)) and one_tps > 0:
+    if isinstance(one_tps, (int, float)) and isinstance(four_tps, (int, float)) and float(one_tps) > 0:
         efficiency = min(1.0, max(0.0, float(four_tps) / float(one_tps)))
-    all_first = [
-        entry["avg_time_to_first_stream_event_seconds"]
-        for entry in summary_by_concurrency.values()
-        if isinstance(entry.get("avg_time_to_first_stream_event_seconds"), (int, float))
-    ]
-    all_tps = [
-        entry["avg_output_tokens_per_second"]
-        for entry in summary_by_concurrency.values()
-        if isinstance(entry.get("avg_output_tokens_per_second"), (int, float))
-    ]
+
+    all_successes = [*lane_a_successes, *lane_b_all_successes]
+    all_failures = [*lane_a_failures, *lane_b_all_failures]
+
     aggregate = {
-        "source": "client_observed",
-        "client_observed_avg_time_to_first_stream_event_seconds": _safe_mean(all_first),
+        "source": "endpoint_perf_two_lane",
+        "client_observed_avg_time_to_first_stream_event_seconds": _safe_mean(
+            [item.client_observed_time_to_first_stream_event_seconds for item in all_successes]
+        ),
         "client_observed_avg_request_wall_time_seconds": _safe_mean(
             [item.client_observed_request_wall_time_seconds for item in all_successes]
         ),
-        "client_observed_avg_output_tokens_per_second": _safe_mean(all_tps),
+        "client_observed_avg_output_tokens_per_second": _safe_mean(
+            [item.client_observed_output_tokens_per_second for item in all_successes]
+        ),
         "client_observed_concurrency_4_efficiency": round(efficiency, 4),
         "request_counts": {
             "serving_requests": len(all_successes),
-            "serving_cells": len(prompt_results),
+            "serving_cells": 5,
             "failed_requests": len(all_failures),
         },
     }
-    if first_request_metric is not None:
-        aggregate["first_request"] = {
-            "client_observed_request_wall_time_seconds": round(
-                first_request_metric.client_observed_request_wall_time_seconds,
-                4,
-            ),
-            "client_observed_time_to_first_stream_event_seconds": round(
-                first_request_metric.client_observed_time_to_first_stream_event_seconds,
-                4,
-            ),
-            "client_observed_output_tokens_per_second": round(
-                first_request_metric.client_observed_output_tokens_per_second,
-                4,
-            ),
-            "stream_fields_seen": list(first_request_metric.stream_fields_seen),
-        }
-    if len(all_successes) > 1:
-        remaining_metrics = all_successes[1:]
-        aggregate["after_first_request"] = {
-            "client_observed_avg_request_wall_time_seconds": _safe_mean(
-                [item.client_observed_request_wall_time_seconds for item in remaining_metrics]
-            ),
-            "client_observed_avg_time_to_first_stream_event_seconds": _safe_mean(
-                [
-                    item.client_observed_time_to_first_stream_event_seconds
-                    for item in remaining_metrics
-                ]
-            ),
-            "client_observed_avg_output_tokens_per_second": _safe_mean(
-                [item.client_observed_output_tokens_per_second for item in remaining_metrics]
-            ),
-        }
     if all_failures:
         aggregate["request_failures"] = all_failures
+
     return {
-        "prompt_results": prompt_results,
-        "by_concurrency": summary_by_concurrency,
+        "perf_profile": "endpoint_two_lane_v1",
+        "lane_a": {
+            "concurrency": 1,
+            "requests": 12,
+            "max_output_tokens": 512,
+            "successful_requests": len(lane_a_successes),
+            "failed_requests": len(lane_a_failures),
+            "error_rate": round(len(lane_a_failures) / 12.0, 4),
+            "ttft_p50_seconds": _percentile(lane_a_ttft, 50),
+            "ttft_p95_seconds": _percentile(lane_a_ttft, 95),
+            "latency_p50_seconds": _percentile(lane_a_latency, 50),
+            "latency_p95_seconds": _percentile(lane_a_latency, 95),
+            "output_tokens_per_second_p50": _percentile(lane_a_tps, 50),
+            "output_tokens_per_second_p95": _percentile(lane_a_tps, 95),
+        },
+        "lane_b": {
+            "concurrency_levels": [2, 4, 8, 16],
+            "requests_per_concurrency": 12,
+            "max_output_tokens": 2048,
+            "by_concurrency": lane_b_results,
+            "degradation": {
+                "ttft_p95_ratio_16_over_1": degradation_ratio,
+            },
+        },
+        "artifacts": {
+            "kind": "inline",
+            "note": "endpoint perf metrics embedded in result JSON",
+        },
+        "by_concurrency": lane_b_results,
         "aggregate": aggregate,
     }
 
@@ -600,6 +654,7 @@ def _stream_request(
     first_event_at: float | None = None
     content_parts: list[str] = []
     output_tokens = 0
+    reported_completion_tokens = 0
     stream_fields_seen: set[str] = set()
     try:
         with requests.post(
@@ -632,7 +687,7 @@ def _stream_request(
                 if isinstance(usage, dict):
                     completion = usage.get("completion_tokens")
                     if isinstance(completion, int) and completion > 0:
-                        output_tokens = completion
+                        reported_completion_tokens = completion
     except Exception as exc:  # noqa: BLE001
         finished_at = time.perf_counter()
         return RequestOutcome(
@@ -649,8 +704,10 @@ def _stream_request(
     if first_event_at is None:
         first_event_at = finished_at
     response_text = "".join(content_parts)
-    if output_tokens <= 0:
-        output_tokens = max(1, len(response_text.split()))
+    visible_output_tokens = max(1, len(response_text.split()))
+    # Keep reported completion tokens for compatibility/diagnostics, but use visible
+    # streamed tokens for local perf rate math.
+    output_tokens = reported_completion_tokens if reported_completion_tokens > 0 else visible_output_tokens
     wall_time = finished_at - started_at
     generate_seconds = max(finished_at - first_event_at, 1e-6)
     return RequestOutcome(
@@ -659,7 +716,7 @@ def _stream_request(
             client_observed_request_wall_time_seconds=wall_time,
             client_observed_time_to_first_stream_event_seconds=first_event_at - started_at,
             output_tokens=output_tokens,
-            client_observed_output_tokens_per_second=output_tokens / generate_seconds,
+            client_observed_output_tokens_per_second=visible_output_tokens / generate_seconds,
             response_text=response_text,
             stream_fields_seen=tuple(sorted(stream_fields_seen)),
         ),

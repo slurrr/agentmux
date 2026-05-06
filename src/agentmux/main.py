@@ -9,10 +9,10 @@ from pathlib import Path
 from agentmux import __version__
 from agentmux.bench import BenchmarkError, run_benchmark
 from agentmux.bench_report import read_result, render_detailed_report
+from agentmux.bench_session import BenchSessionError, DEFAULT_REPO, run_bench_session
 from agentmux.config import STACK_ROOT, list_stacks, resolve_stack
 from agentmux.runner import build_stack_plan, launch_stack
 from agentmux.runtime import (
-    clear_active,
     load_history,
     pid_is_running,
     read_active,
@@ -78,6 +78,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="With --launch, leave the launched stack running after the benchmark",
     )
+    bench_parser.add_argument(
+        "--judge",
+        action="store_true",
+        help="Run end-of-run judge audit and store audit JSON in result",
+    )
+    bench_parser.add_argument(
+        "--no-perf",
+        action="store_true",
+        help="Skip endpoint perf for this run",
+    )
 
     bench_show_parser = subparsers.add_parser(
         "bench-show",
@@ -92,9 +102,9 @@ def build_parser() -> argparse.ArgumentParser:
             "  agentmux bench-show qwen3_5-bench\n"
             "  agentmux bench-show /path/to/result.json\n"
             "  agentmux bench-show --failures-only\n"
-            "  agentmux bench-show --judge-disagrees\n"
+            "  agentmux bench-show --judge-flagged-only\n"
             "  agentmux bench-show --case bounded_structured_summary\n"
-            "  agentmux bench-show --compact\n"
+            "  agentmux bench-show --full\n"
             "  agentmux bench-show picked --json"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -115,18 +125,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show only failed cases",
     )
     bench_show_parser.add_argument(
-        "--judge-disagrees",
+        "--judge-flagged-only",
         action="store_true",
-        help="Show only cases where the judge said deterministic scoring was not fair",
+        help="Show only judge-flagged cases",
     )
     bench_show_parser.add_argument(
         "--case",
         help="Show only cases whose id contains this string",
     )
     bench_show_parser.add_argument(
-        "--compact",
+        "--full",
         action="store_true",
-        help="Shorter case view for faster skimming",
+        help="Show full prompt/response text without truncation",
+    )
+
+    bench_session_parser = subparsers.add_parser(
+        "bench-session",
+        help="Launch a manual sandboxed pi session for benchmark-style evaluation",
+    )
+    bench_session_parser.add_argument("stack", help="Stack name")
+    bench_session_parser.add_argument(
+        "--repo",
+        type=Path,
+        default=DEFAULT_REPO,
+        help=f"Source git repo path (default: {DEFAULT_REPO})",
+    )
+    bench_session_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Disable network in the sandbox",
+    )
+    bench_session_parser.add_argument(
+        "--preserve",
+        action="store_true",
+        help="Preserve session worktree instead of tearing down on success",
     )
 
     subparsers.add_parser("version", help="Print the CLI version")
@@ -295,11 +327,20 @@ def _run_benchmark_with_launch(
     stack_name: str,
     root: Path,
     keep_running: bool,
+    judge: bool = False,
+    no_perf: bool = False,
 ) -> tuple[dict[str, object], Path, str]:
     stack = resolve_stack(stack_name, root=root)
     service = stack.services[stack.primary_service]
     launch_started_at = time.time()
-    runtime_stack = launch_stack(stack_name, root=root)
+    service_args = getattr(service, "args", None)
+    previous_max_num_seqs = (service_args or {}).get("max_num_seqs") if service_args else None
+    bench_vllm_overrides = {"max_num_seqs": 32}
+    runtime_stack = launch_stack(
+        stack_name,
+        root=root,
+        vllm_arg_overrides=bench_vllm_overrides,
+    )
     primary_runtime = next(
         runtime_service
         for runtime_service in runtime_stack.services
@@ -321,17 +362,27 @@ def _run_benchmark_with_launch(
             ),
             "ready_after_seconds": round(ready_seconds, 3),
             "kept_running": keep_running,
+            "bench_overrides": {
+                "vllm_args": {
+                    "max_num_seqs": {
+                        "before": previous_max_num_seqs,
+                        "after": 32,
+                        "reason": "bench endpoint perf standardizes concurrency up to 16",
+                    }
+                }
+            },
         }
         return run_benchmark(
             stack_name,
             root,
             target_mode="launched",
             launch_observation=launch_observation,
+            judge_audit=judge,
+            enable_perf=not no_perf,
         )
     finally:
         if not keep_running:
             stop_runtime(runtime_stack)
-            clear_active()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -376,7 +427,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.stack and args.stack != active.stack:
             raise SystemExit(f"Active stack is {active.stack}, not {args.stack}")
         stop_runtime(active)
-        clear_active()
         print(f"stopped stack: {active.stack}")
         return 0
 
@@ -409,9 +459,16 @@ def main(argv: list[str] | None = None) -> int:
                     args.stack,
                     args.root,
                     args.keep_running,
+                    args.judge,
+                    args.no_perf,
                 )
             else:
-                _result, _path, summary = run_benchmark(args.stack, args.root)
+                _result, _path, summary = run_benchmark(
+                    args.stack,
+                    args.root,
+                    judge_audit=args.judge,
+                    enable_perf=not args.no_perf,
+                )
         except BenchmarkError as exc:
             raise SystemExit(str(exc)) from exc
         except Exception as exc:
@@ -432,11 +489,27 @@ def main(argv: list[str] | None = None) -> int:
                     result,
                     path,
                     failures_only=args.failures_only,
-                    judge_disagrees=args.judge_disagrees,
+                    judge_flagged_only=args.judge_flagged_only,
                     case_filter=args.case,
-                    compact=args.compact,
+                    full=args.full,
                 )
             )
+        return 0
+
+    if args.command == "bench-session":
+        try:
+            _summary, message = run_bench_session(
+                args.stack,
+                args.root,
+                repo=args.repo,
+                offline=args.offline,
+                preserve=args.preserve,
+            )
+        except BenchSessionError as exc:
+            raise SystemExit(str(exc)) from exc
+        except Exception as exc:
+            raise SystemExit(f"bench-session failed: {exc}") from exc
+        print(message)
         return 0
 
     if args.command == "version":

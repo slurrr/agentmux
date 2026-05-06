@@ -35,8 +35,6 @@
         {%- endfor %}
     {%- elif content is none or content is undefined %}
         {{- '' }}
-    {%- elif content is mapping %}                                                                                                
-        {{- content | tojson }}  
     {%- else %}
         {{- raise_exception('Unexpected content type.') }}
     {%- endif %}

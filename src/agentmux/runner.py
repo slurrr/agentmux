@@ -216,7 +216,10 @@ def _apply_assets(command: list[str], service: ServiceSpec) -> set[str]:
     return applied_keys
 
 
-def _build_vllm_command(service: ServiceSpec) -> list[str]:
+def _build_vllm_command(
+    service: ServiceSpec,
+    arg_overrides: dict[str, FlagValue] | None = None,
+) -> list[str]:
     if service.model is None:
         raise ValueError(f"vllm service {service.name} is missing model")
     runtime_bin_dir = _resolve_runtime_bin_dir(service.runtime_bin_dir)
@@ -245,7 +248,10 @@ def _build_vllm_command(service: ServiceSpec) -> list[str]:
     if service.served_model_name:
         command.extend(["--served-model-name", service.served_model_name])
     asset_keys = _apply_assets(command, service)
-    _apply_flag_map(command, service.args or {}, excluded_keys=asset_keys)
+    merged_args = dict(service.args or {})
+    if arg_overrides:
+        merged_args.update(arg_overrides)
+    _apply_flag_map(command, merged_args, excluded_keys=asset_keys)
     _apply_loras(command, service.loras or [])
     command.extend(service.extra_args or [])
     return command
@@ -353,6 +359,7 @@ def build_stack_plan(
     stack_name: str,
     root: Path = STACK_ROOT,
     include_archive: bool = True,
+    vllm_arg_overrides: dict[str, FlagValue] | None = None,
 ) -> StackLaunchPlan:
     load_dotenv(dotenv_path=Path(".env"))
     stack = resolve_stack(stack_name, root=root, include_archive=include_archive)
@@ -371,7 +378,7 @@ def build_stack_plan(
                     service=service_name,
                     engine=service.engine,
                     env=env,
-                    command=_build_vllm_command(service),
+                    command=_build_vllm_command(service, arg_overrides=vllm_arg_overrides),
                     port=service.port,
                     host=service.host,
                 )
@@ -524,12 +531,20 @@ def _wait_for_dependency(plan: StackLaunchPlan, runtime_services: list[RuntimeSe
     )
 
 
-def launch_stack(stack_name: str, root: Path = STACK_ROOT) -> RuntimeStack:
+def launch_stack(
+    stack_name: str,
+    root: Path = STACK_ROOT,
+    vllm_arg_overrides: dict[str, FlagValue] | None = None,
+) -> RuntimeStack:
     active = read_active(prune_stale=True)
     if active is not None and any(pid_is_running(service.pid) for service in active.services):
         raise RuntimeError(f"Active stack already running: {active.stack}")
 
-    plan = build_stack_plan(stack_name, root=root)
+    plan = build_stack_plan(
+        stack_name,
+        root=root,
+        vllm_arg_overrides=vllm_arg_overrides,
+    )
     runtime_services: list[RuntimeService] = []
 
     try:

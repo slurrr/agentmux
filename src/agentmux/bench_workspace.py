@@ -232,62 +232,18 @@ def _run_workspace_case(
         visible_response_tokens=visible_tokens,
         tokenizer_source=tokenizer_source,
     )
-    if request_error is not None or stop_reason != "final_answer":
-        failure_reason = request_error or {
-            "phase": "workspace_conversation",
-            "error_type": "ConversationIncomplete",
-            "message": f"conversation stopped at {stop_reason}",
-            "elapsed_seconds": 0.0,
-        }
-        return {
-            "id": case.id,
-            "kind": "workspace",
-            "group": "quality_with_tools",
-            "fixture": case.fixture,
-            "judge_eligible": False,
-            "default_judge_enabled": False,
-            "prompt": case.prompt,
-            "response": final_answer,
-            "thinking": thinking,
-            "score": 0.0,
-            "passed": False,
-            "deterministic_failures": [
-                str(failure_reason.get("message", "workspace request failed"))
-            ],
-            "rubric_passes": [],
-            "rubric_failures": [],
-            "reliability_flags": {
-                "structured_output_failure": False,
-                "constraint_violation": False,
-                "hallucination_fabrication": False,
-                "empty_evasive_degenerate": True,
-                "request_failed": True,
-            },
-            "judge": None,
-            "usage": usage_totals,
-            "status": "failed",
-            "failure": failure_reason,
-            "token_accounting": {
-                **token_accounting,
-                "prompt_tokens": int(usage_totals.get("prompt_tokens", 0)),
-                "completion_tokens": completion_tokens,
-                "total_tokens": int(usage_totals.get("total_tokens", 0)),
-                "token_source": tokenizer_source,
-            },
-            "tool_trace": trace,
-            "tool_summary": {
-                "model_requests": model_requests,
-                "total_calls": len(trace),
-                "invalid_calls": sum(1 for item in trace if not item.get("valid", False)),
-                "tool_counts": _tool_counts(trace),
-            },
-            "workspace": {
-                "changed_files": sorted(_changed_files(before, after)),
-                "file_checks": [],
-                "conversation_stop_reason": stop_reason,
-            },
-        }
     evaluation = _evaluate_workspace_case(case, before, after, final_answer, trace, stop_reason)
+    failure_reason = None
+    if request_error is not None:
+        failure_reason = request_error
+        evaluation["deterministic_failures"].append(
+            str(request_error.get("message", "workspace request failed"))
+        )
+        evaluation["reliability_flags"]["empty_evasive_degenerate"] = True
+        evaluation["reliability_flags"]["request_failed"] = True
+        evaluation["score"] = 0.0
+        evaluation["passed"] = False
+    status = "failed" if request_error is not None else "ok"
     return {
         "id": case.id,
         "kind": "workspace",
@@ -301,12 +257,12 @@ def _run_workspace_case(
         "score": evaluation["score"],
         "passed": evaluation["passed"],
         "deterministic_failures": evaluation["deterministic_failures"],
-        "rubric_passes": evaluation["rubric_passes"],
-        "rubric_failures": evaluation["rubric_failures"],
+        "rubric_passes": [],
+        "rubric_failures": [],
         "reliability_flags": evaluation["reliability_flags"],
         "judge": None,
         "usage": usage_totals,
-        "status": "ok",
+        "status": status,
         "token_accounting": {
             **token_accounting,
             "prompt_tokens": int(usage_totals.get("prompt_tokens", 0)),
@@ -314,6 +270,7 @@ def _run_workspace_case(
             "total_tokens": int(usage_totals.get("total_tokens", 0)),
             "token_source": tokenizer_source,
         },
+        "failure": failure_reason,
         "tool_trace": trace,
         "tool_summary": {
             "model_requests": model_requests,
@@ -745,17 +702,13 @@ def _finalize_evaluation(
     reliability_flags: dict[str, bool],
     file_checks: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    if deterministic_failures:
-        score = 0.0
-    else:
-        total = len(rubric_passes) + len(rubric_failures)
-        score = 1.0 if total == 0 else len(rubric_passes) / total
+    score = 0.0 if deterministic_failures else 1.0
     return {
         "score": round(score, 3),
-        "passed": not deterministic_failures and score >= 0.75,
+        "passed": not deterministic_failures,
         "deterministic_failures": deterministic_failures,
-        "rubric_passes": rubric_passes,
-        "rubric_failures": rubric_failures,
+        "rubric_passes": [],
+        "rubric_failures": [],
         "reliability_flags": reliability_flags,
         "file_checks": file_checks,
     }

@@ -222,26 +222,11 @@ def test_bench_show_formats_latest_result(tmp_path: Path, monkeypatch, capsys) -
     captured = capsys.readouterr()
     assert rc == 0
     assert "benchmark: benchstack (ghosty-local-agent)" in captured.out
-    assert "client observed" in captured.out
-    assert "Attention Backend: FLASH_ATTN" in captured.out
-    assert "Potential Backends:" in captured.out
-    assert "First Benchmark Request After Ready Check:" in captured.out
-    assert "vllm startup" in captured.out
-    assert "requested fp8_e4m3  ->  resolved fp8_e4m3" in captured.out
-    assert "requested auto  ->  resolved torch.bfloat16" in captured.out
-    assert "vLLM Prometheus Gauge Samples (Serving Phase):" in captured.out
-    assert "Peak Requests Running: 4" in captured.out
-    assert "vLLM Prometheus Metrics (Serving Phase):" in captured.out
-    assert "Mean Time To First Token: 0.032s" in captured.out
-    assert "Requests Completed: 21" in captured.out
+    assert "perf (endpoint)" in captured.out
+    assert "deterministic prompt bench" in captured.out
     assert "kv cache dtype: fp8_e4m3" in captured.out
-    assert "request accounting" in captured.out
-    assert "vllm runtime" in captured.out
-    assert "cases" in captured.out
-    assert "Judge Verdict: Fair" in captured.out
-    assert "Judge Note: response was concise and useful" in captured.out
-    assert "response:" in captured.out
-    assert "clarify" in captured.out
+    assert "failures" in captured.out
+    assert "judge-flagged" in captured.out
 
 
 def test_bench_show_json_outputs_selected_result(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -342,13 +327,12 @@ def test_bench_show_filters_and_judge_note(tmp_path: Path, monkeypatch, capsys) 
     }
     (result_dir / "20260503-222222-picked.json").write_text(json.dumps(payload), encoding="utf-8")
 
-    rc = main(["bench-show", "picked", "--failures-only", "--judge-disagrees", "--compact"])
+    rc = main(["bench-show", "picked", "--failures-only", "--judge-flagged-only", "--full"])
     captured = capsys.readouterr()
     assert rc == 0
-    assert "filters: failures-only, judge-disagrees, compact" in captured.out
-    assert "failed_case" in captured.out
+    assert "failed_case" not in captured.out
     assert "passed_case" not in captured.out
-    assert "Judge Verdict: Too Harsh" in captured.out
+    assert "no cases matched the current filters" in captured.out
 
 
 def test_bench_launch_runs_and_stops_stack(monkeypatch, capsys) -> None:
@@ -370,7 +354,10 @@ def test_bench_launch_runs_and_stops_stack(monkeypatch, capsys) -> None:
     )
     observed_calls: list[str] = []
 
-    monkeypatch.setattr("agentmux.main.launch_stack", lambda stack, root: launched)
+    monkeypatch.setattr(
+        "agentmux.main.launch_stack",
+        lambda stack, root, vllm_arg_overrides=None: launched,
+    )
     monkeypatch.setattr("agentmux.main.resolve_stack", lambda stack, root: type("S", (), {
         "primary_service": "main",
         "services": {"main": type("Svc", (), {"host": "127.0.0.1", "port": 8100})()},
@@ -384,6 +371,8 @@ def test_bench_launch_runs_and_stops_stack(monkeypatch, capsys) -> None:
         *,
         target_mode="already_running",
         launch_observation=None,
+        judge_audit=False,
+        enable_perf=True,
     ):
         observed_calls.append(target_mode)
         assert launch_observation is not None
@@ -394,13 +383,12 @@ def test_bench_launch_runs_and_stops_stack(monkeypatch, capsys) -> None:
         "agentmux.main.stop_runtime",
         lambda runtime: observed_calls.append("stopped"),
     )
-    monkeypatch.setattr("agentmux.main.clear_active", lambda: observed_calls.append("cleared"))
 
     rc = main(["bench", "benchstack", "--launch"])
     captured = capsys.readouterr()
     assert rc == 0
     assert "bench ok" in captured.out
-    assert observed_calls == ["launched", "stopped", "cleared"]
+    assert observed_calls == ["launched", "stopped"]
 
 
 
@@ -448,4 +436,4 @@ def test_bench_show_reports_missing_judge_data(tmp_path: Path, monkeypatch, caps
     rc = main(["bench-show", "old"])
     captured = capsys.readouterr()
     assert rc == 0
-    assert "judge: unavailable in this result file" in captured.out
+    assert "judge: unavailable in this result file" not in captured.out

@@ -239,164 +239,151 @@ def _response_block(
 
 
 def render_summary(result: dict[str, Any], result_path: Path) -> str:
+    WIDTH = 80
+
+    def fmt_num(value: Any, unit: str | None = None) -> str:
+        if value is None:
+            return "n/a"
+        try:
+            out = f"{float(value):.3f}"
+        except Exception:
+            return str(value)
+        return f"{out} {unit}" if unit else out
+
+    def err_rate(completed: Any, failed: Any) -> str:
+        try:
+            c = int(completed)
+            f = int(failed)
+        except Exception:
+            return "n/a"
+        total = c + f
+        pct = (f / total * 100.0) if total else 0.0
+        return f"{f}/{total} ({pct:.1f}%)"
+
+    def grid(headers: list[str], rows: list[list[str]]) -> list[str]:
+        widths = [len(h) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                widths[i] = max(widths[i], len(cell))
+        top = "┌" + "┬".join("─" * (w + 2) for w in widths) + "┐"
+        sep = "├" + "┼".join("─" * (w + 2) for w in widths) + "┤"
+        bot = "└" + "┴".join("─" * (w + 2) for w in widths) + "┘"
+        head = "│ " + " │ ".join(h.ljust(widths[i]) for i, h in enumerate(headers)) + " │"
+        out = [top, head, sep]
+        for row in rows:
+            out.append("│ " + " │ ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)) + " │")
+        out.append(bot)
+        return out
+
     summary = result["summary"]
     categories = summary["categories"]
-    serving = categories["serving"]
-    aggregate = serving.get("aggregate", {})
-    vram = categories["vram"]
-    quality = categories["quality_no_tools"]
-    quality_with_tools = categories.get("quality_with_tools")
-    thinking = categories.get("thinking")
-    reliability = categories["reliability"]
-    run = result.get("run", {}) if isinstance(result.get("run"), dict) else {}
-    first_event = aggregate.get(
-        "client_observed_avg_time_to_first_stream_event_seconds",
-        aggregate.get("avg_ttft_seconds", 0.0),
-    )
-    client_tps = aggregate.get(
-        "client_observed_avg_output_tokens_per_second",
-        aggregate.get("avg_output_tokens_per_second", 0.0),
-    )
-    concurrency_efficiency = aggregate.get(
-        "client_observed_concurrency_4_efficiency",
-        aggregate.get("concurrency_4_efficiency", 0.0),
-    )
-    vllm_gen_tps = aggregate.get("vllm_generation_throughput_tokens_per_second_mean")
-    vllm_prompt_tps = aggregate.get("vllm_prompt_throughput_tokens_per_second_mean")
+    quality_no_tools = categories.get("quality_no_tools", {})
+    quality_with_tools = categories.get("quality_with_tools", {})
+
     declared = result.get("declared_config", {})
     declared_args = declared.get("args", {}) if isinstance(declared, dict) else {}
-    kv_cache_dtype = (
-        declared_args.get("kv_cache_dtype") if isinstance(declared_args, dict) else None
-    )
+    run = result.get("run", {}) if isinstance(result.get("run"), dict) else {}
+    launch_observation = run.get("launch_observation") if isinstance(run.get("launch_observation"), dict) else {}
+    overrides = launch_observation.get("bench_overrides", {}) if isinstance(launch_observation, dict) else {}
+    max_num_seqs_override = None
+    if isinstance(overrides, dict):
+        vllm_args = overrides.get("vllm_args")
+        if isinstance(vllm_args, dict):
+            max_num_seqs_override = vllm_args.get("max_num_seqs")
+
+    perf = result.get("perf") if isinstance(result.get("perf"), dict) else {}
+    perf_summary_path = perf.get("perf_summary_path") if isinstance(perf.get("perf_summary_path"), str) else None
+    perf_summary: dict[str, Any] | None = None
+    if perf_summary_path:
+        try:
+            perf_summary = json.loads(Path(perf_summary_path).read_text(encoding="utf-8"))
+        except Exception:
+            perf_summary = None
+
+    cases = list(result.get("cases", []))
+    failed_count = sum(1 for c in cases if (not bool(c.get("passed"))) or c.get("status") == "failed")
+    judge_flagged_count = 0
+    audit = result.get("audit")
+    if isinstance(audit, dict) and isinstance(audit.get("judge_review"), list):
+        judge_flagged_count = sum(1 for item in audit["judge_review"] if isinstance(item, dict) and bool(item.get("flag")))
+
     lines = [
-        _rule(f"benchmark: {result['stack']['name']} ({result['profile']})"),
-        _kv("result", str(result_path), indent=0),
-        _kv("verdict", str(summary["verdict"]), indent=0),
-        _kv("overall score", f"{summary['overall_score']:.3f}", indent=0),
-        _kv("run status", str(run.get("status", "unknown")), indent=0),
-        _kv("kv cache dtype", str(kv_cache_dtype or "n/a"), indent=0),
-        "",
-        _rule("scorecard", fill="-"),
-        _kv("serving", f"{summary['serving_score']:.3f}"),
-        _kv("quality", f"{summary['quality_score']:.3f}"),
-        _kv("reliability", f"{summary['reliability_score']:.3f}"),
-        "",
-        _rule("client observed", fill="-"),
-        _kv("avg first stream event", f"{float(first_event):.3f}s"),
-        _kv("avg output tok/s", f"{float(client_tps):.2f}"),
-        _kv("concurrency 4 efficiency", f"{float(concurrency_efficiency):.2f}"),
-        "",
-        _rule("vllm observed", fill="-"),
-        _kv(
-            "generation tok/s",
-            "n/a" if vllm_gen_tps is None else f"{float(vllm_gen_tps):.2f}",
-        ),
-        _kv(
-            "prompt tok/s",
-            "n/a" if vllm_prompt_tps is None else f"{float(vllm_prompt_tps):.2f}",
-        ),
-        "",
-        _rule("vram", fill="-"),
+        _rule(f"🚀 BENCHMARK: {result['stack']['name']} ({result['profile']})", width=WIDTH),
+        _kv("status", str(run.get("status", "unknown")).upper(), indent=0, width=WIDTH),
+        _kv("failures", str(failed_count), indent=0, width=WIDTH),
+        _kv("judge flagged", str(judge_flagged_count), indent=0, width=WIDTH),
+        _kv("result", str(result_path), indent=0, width=WIDTH),
+        _kv("model", str(declared.get("model") or run.get("model") or "n/a"), indent=0, width=WIDTH),
+        _kv("served model", str(declared.get("served_model_name") or "n/a"), indent=0, width=WIDTH),
+        _kv("dtype", str(declared_args.get("dtype") or "auto"), indent=0, width=WIDTH),
+        _kv("kv cache dtype", str(declared_args.get("kv_cache_dtype") or "n/a"), indent=0, width=WIDTH),
+        _kv("max model len", str(declared_args.get("max_model_len") or "n/a"), indent=0, width=WIDTH),
     ]
-    if vram.get("available"):
-        lines.extend(
-            [
-                _kv("used", f"{vram['used_mib']} MiB"),
-                _kv("free", f"{vram['free_mib']} MiB"),
-                _kv("total", f"{vram['total_mib']} MiB"),
-                _kv("percent used", f"{vram['percent_used']:.1f}%"),
-            ]
+    if isinstance(max_num_seqs_override, dict):
+        lines.append(
+            _kv(
+                "bench override",
+                f"max-num-seqs: {max_num_seqs_override.get('before')} -> {max_num_seqs_override.get('after')}",
+                indent=0,
+                width=WIDTH,
+            )
         )
+
+    lines.extend(["", _rule("📊 PERF (ENDPOINT)", fill="-", width=WIDTH)])
+    if not perf_summary:
+        lines.append(_kv("perf", "missing for this run (old format or perf failed)", indent=0, width=WIDTH))
+    elif not perf_summary.get("available", False):
+        lines.append(_kv("perf", f"unavailable: {perf_summary.get('reason')}", indent=0, width=WIDTH))
     else:
-        lines.append(_kv("status", f"unavailable ({vram.get('reason', 'unknown')})"))
-    lines.extend(
-        [
-            "",
-            _rule("quality without tools", fill="-"),
-            _kv("score", f"{float(quality.get('score', summary['quality_score'])):.3f}"),
-            _kv("passed cases", f"{quality['passed_cases']}/{quality['total_cases']}"),
-            "",
-        ]
-    )
-    if isinstance(quality_with_tools, dict):
-        passed_cases = quality_with_tools.get("passed_cases", 0)
-        total_cases = quality_with_tools.get("total_cases", 0)
-        lines.extend(
-            [
-                _rule("quality with tools", fill="-"),
-                _kv("score", f"{float(quality_with_tools.get('score', 0.0)):.3f}"),
-                _kv("passed cases", f"{passed_cases}/{total_cases}"),
-                _kv("tool calls", f"{quality_with_tools.get('total_tool_calls', 0)}"),
-                _kv("invalid tool calls", f"{quality_with_tools.get('invalid_tool_calls', 0)}"),
-                "",
-            ]
-        )
-    if isinstance(thinking, dict):
-        overall = thinking.get("overall", {}) if isinstance(thinking.get("overall"), dict) else {}
-        groups = thinking.get("groups", {}) if isinstance(thinking.get("groups"), dict) else {}
-        lines.extend(
-            [
-                _rule("thinking", fill="-"),
-                _kv(
-                    "avg thinking tokens",
-                    f"{float(overall.get('mean_thinking_tokens', 0.0)):.3f}",
-                ),
-                _kv(
-                    "avg tool-call tokens",
-                    f"{float(overall.get('mean_tool_call_tokens', 0.0)):.3f}",
-                ),
-                _kv(
-                    "exact cases",
-                    f"{int(overall.get('exact_cases', 0))}/{int(overall.get('total_cases', 0))}",
-                ),
-                _kv(
-                    "avg visible response tokens",
-                    f"{float(overall.get('mean_visible_response_tokens', 0.0)):.3f}",
-                ),
-                _kv(
-                    "avg completion tokens",
-                    f"{float(overall.get('mean_completion_tokens', 0.0)):.3f}",
-                ),
-            ]
-        )
-        group_no_tools = groups.get("quality_no_tools") if isinstance(groups, dict) else None
-        group_with_tools = groups.get("quality_with_tools") if isinstance(groups, dict) else None
-        if isinstance(group_no_tools, dict):
-            lines.append(
-                _kv(
-                    "no-tools avg thinking",
-                    f"{float(group_no_tools.get('mean_thinking_tokens', 0.0)):.3f}",
-                )
-            )
-        if isinstance(group_with_tools, dict):
-            lines.append(
-                _kv(
-                    "with-tools avg thinking",
-                    f"{float(group_with_tools.get('mean_thinking_tokens', 0.0)):.3f}",
-                )
-            )
+        lane_a = perf_summary.get("lane_metrics", {}).get("lane_a", {})
+        lane_b = perf_summary.get("lane_metrics", {}).get("lane_b", {})
+        a_completed = lane_a.get("completed", lane_a.get("completed_requests"))
+        a_failed = lane_a.get("failed", lane_a.get("failed_requests"))
+
+        lines.append(_kv("provenance", f"vllm={perf_summary.get('vllm_version')} module={perf_summary.get('module')}", indent=0, width=WIDTH))
         lines.append("")
+        lines.extend(grid(
+            ["Lane A", "Value"],
+            [
+                ["req/s", fmt_num(lane_a.get("request_throughput"))],
+                ["tok/s", fmt_num(lane_a.get("output_throughput"))],
+                ["total tok/s", fmt_num(lane_a.get("total_token_throughput"))],
+                ["TTFT mean", fmt_num(lane_a.get("mean_ttft_ms"), "ms")],
+                ["TTFT p99", fmt_num(lane_a.get("p99_ttft_ms"), "ms")],
+                ["TPOT mean", fmt_num(lane_a.get("mean_tpot_ms"), "ms")],
+                ["ITL mean", fmt_num(lane_a.get("mean_itl_ms"), "ms")],
+                ["Duration", fmt_num(lane_a.get("duration"), "s")],
+                ["Errors", err_rate(a_completed, a_failed)],
+            ],
+        ))
+        lines.append("")
+        rows = []
+        for level in (2, 4, 8, 16):
+            row = lane_b.get(str(level), {}) if isinstance(lane_b, dict) else {}
+            completed = row.get("completed", row.get("completed_requests"))
+            failed = row.get("failed", row.get("failed_requests"))
+            rows.append([
+                str(level),
+                fmt_num(row.get("request_throughput")),
+                fmt_num(row.get("output_throughput")),
+                fmt_num(row.get("mean_ttft_ms"), "ms"),
+                fmt_num(row.get("p99_ttft_ms"), "ms"),
+                err_rate(completed, failed),
+            ])
+        lines.extend(grid(["Conc", "req/s", "tok/s", "TTFT mean", "TTFT p99", "Errors"], rows))
+
+    lines.extend(["", _rule("✅ PROMPT BENCH", fill="-", width=WIDTH)])
     lines.extend(
-        [
-            _rule("reliability", fill="-"),
-            _kv(
-                "structured output failure rate",
-                f"{reliability['structured_output_failure_rate']:.1%}",
-            ),
-            _kv("constraint violation rate", f"{reliability['constraint_violation_rate']:.1%}"),
-            _kv(
-                "hallucination/fabrication rate",
-                f"{reliability['hallucination_fabrication_rate']:.1%}",
-            ),
-            _kv("empty/evasive rate", f"{reliability['empty_evasive_degenerate_rate']:.1%}"),
-        ]
+        grid(
+            ["Metric", "Value"],
+            [
+                ["Drills (no-tools)", f"{quality_no_tools.get('passed_cases', 0)}/{quality_no_tools.get('total_cases', 0)} passed"],
+                ["Workspace/tool outcomes", f"{quality_with_tools.get('passed_cases', 0)}/{quality_with_tools.get('total_cases', 0)} passed"],
+                ["Invalid tool calls", str(quality_with_tools.get("invalid_tool_calls", 0))],
+            ],
+        )
     )
-    blockers = summary.get("blocking_weaknesses", [])
-    lines.extend(["", _rule("blocking weaknesses", fill="-")])
-    if blockers:
-        lines.extend(_bullets("items", list(blockers), indent=0))
-    else:
-        lines.append(_kv("items", "none", indent=0))
+    lines.append(_kv("prompt reference", "docs/reference/bench-prompts.md", indent=0, width=WIDTH))
     return "\n".join(lines)
 
 
@@ -925,175 +912,119 @@ def render_detailed_report(
     result_path: Path,
     *,
     failures_only: bool = False,
-    judge_disagrees: bool = False,
+    judge_flagged_only: bool = False,
     case_filter: str | None = None,
-    compact: bool = False,
+    full: bool = False,
 ) -> str:
+    WIDTH = 80
+    max_chars = None if full else 1200
     summary = render_summary(result, result_path)
     cases = list(result.get("cases", []))
-    if failures_only:
-        cases = [case for case in cases if not bool(case.get("passed"))]
-    if judge_disagrees:
-        cases = [
-            case
-            for case in cases
-            if isinstance(case.get("judge"), dict)
-            and case["judge"].get("deterministic_score_fit") not in (None, "fair")
-        ]
+    by_id = {str(case.get("id")): case for case in cases}
+
+    judge_flags: dict[str, dict[str, Any]] = {}
+    audit = result.get("audit")
+    if isinstance(audit, dict):
+        review = audit.get("judge_review")
+        if isinstance(review, list):
+            for item in review:
+                if not isinstance(item, dict):
+                    continue
+                cid = str(item.get("case_id", ""))
+                if cid and bool(item.get("flag")):
+                    judge_flags[cid] = item
+    for case in cases:
+        cid = str(case.get("id", ""))
+        judge = case.get("judge")
+        if isinstance(judge, dict) and judge.get("deterministic_score_fit") not in (None, "fair"):
+            judge_flags.setdefault(
+                cid,
+                {
+                    "case_id": cid,
+                    "flag": True,
+                    "note": judge.get("quality_note") or "judge flagged deterministic fit",
+                    "quote": "",
+                },
+            )
+
+    failure_cases = [c for c in cases if (not bool(c.get("passed"))) or c.get("status") == "failed"]
+    flagged_cases = [by_id[cid] for cid in judge_flags if cid in by_id and by_id[cid] not in failure_cases]
+
     if case_filter:
         needle = case_filter.lower()
-        cases = [case for case in cases if needle in str(case.get("id", "")).lower()]
-    cases.sort(
-        key=lambda case: (
-            isinstance(case.get("judge"), dict)
-            and case["judge"].get("deterministic_score_fit") in (None, "fair"),
-            bool(case.get("passed")),
-            float(case.get("score", 0.0)),
-            case["id"],
+        failure_cases = [c for c in failure_cases if needle in str(c.get("id", "")).lower()]
+        flagged_cases = [c for c in flagged_cases if needle in str(c.get("id", "")).lower()]
+    if failures_only:
+        flagged_cases = []
+    if judge_flagged_only:
+        failure_cases = []
+
+    lines = ["", "", summary, "", _rule("⚠ FAILURES", width=WIDTH), _kv("count", str(len(failure_cases)), indent=0, width=WIDTH)]
+
+    def _truncate(text: str) -> tuple[str, bool]:
+        if max_chars is None or len(text) <= max_chars:
+            return text, False
+        return text[:max_chars], True
+
+    def _wrap_block(text: str, indent: str = "    ") -> str:
+        parts = []
+        for para in text.splitlines() or [text]:
+            if not para.strip():
+                parts.append("")
+                continue
+            parts.append(textwrap.fill(para, width=WIDTH, initial_indent=indent, subsequent_indent=indent))
+        return "\n".join(parts)
+
+    for case in failure_cases:
+        cid = str(case.get("id", "?"))
+        prompt, prompt_trunc = _truncate(str(case.get("prompt", "")))
+        response, resp_trunc = _truncate(str(case.get("response", "")))
+        lines.extend(
+            [
+                "",
+                f"✖ {cid} · {case.get('group', '-')} · score {float(case.get('score', 0.0)):.3f}",
+                _kv("deterministic failures", ", ".join(case.get("deterministic_failures") or []) or "none", width=WIDTH),
+                "  prompt:",
+                _wrap_block(prompt),
+                "  response:",
+                _wrap_block(response),
+            ]
         )
-    )
-
-    lines = ["", "", summary]
-    _append_client_observed(lines, result)
-    _append_launch_observation(lines, result)
-    _append_declared_config(lines, result)
-    _append_observed_startup(lines, result)
-    _append_observed_runtime(lines, result)
-    _append_request_accounting(lines, result)
-    lines.extend(["", _rule("cases")])
-    if failures_only or judge_disagrees or case_filter or compact:
-        active_filters: list[str] = []
-        if failures_only:
-            active_filters.append("failures-only")
-        if judge_disagrees:
-            active_filters.append("judge-disagrees")
-        if case_filter:
-            active_filters.append(f"case={case_filter}")
-        if compact:
-            active_filters.append("compact")
-        lines.append(_kv("filters", ", ".join(active_filters), indent=0))
-        lines.append("")
-    if not any(isinstance(case.get("judge"), dict) for case in result.get("cases", [])):
-        lines.append(
-            _kv(
-                "judge",
-                "unavailable in this result file; rerun with judge-enabled benchmark output",
-                indent=0,
-            )
-        )
-        lines.append("")
-    if not cases:
-        lines.append(_kv("result", "no cases matched the current filters", indent=0))
-        return "\n".join(lines).rstrip()
-    for index, case in enumerate(cases, start=1):
-        passed = bool(case.get("passed"))
-        case_status = str(case.get("status", "ok"))
-        status = (
-            "PASS"
-            if passed and case_status != "failed"
-            else ("ERROR" if case_status == "failed" else "FAIL")
-        )
-        glyph = "✓" if passed and case_status != "failed" else "!"
-        header = (
-            f"{glyph} [{status}] {index:02d}. {case['id']}"
-            f"  ·  {case['group']}  ·  score {float(case['score']):.3f}"
-        )
-        lines.append(header)
-        token_accounting = case.get("token_accounting")
-        if isinstance(token_accounting, dict):
-            thinking_tokens = token_accounting.get(
-                "thinking_tokens", token_accounting.get("derived_thinking_tokens", 0)
-            )
-            source = str(token_accounting.get("thinking_tokens_source", "unknown"))
-            exact = bool(token_accounting.get("thinking_tokens_exact", False))
-            lines.append(
-                _kv(
-                    "Thinking Tokens",
-                    f"{int(thinking_tokens)} ({'exact' if exact else 'estimated'})",
-                )
-            )
-            lines.append(_kv("Thinking Source", source))
-        lines.append("")
-
-        deterministic = list(case.get("deterministic_failures") or [])
-        rubric_failures = list(case.get("rubric_failures") or [])
-        rubric_passes = list(case.get("rubric_passes") or [])
-
-        failure = case.get("failure")
-        if isinstance(failure, dict):
-            lines.extend(
-                [
-                    _rule("failure", fill="-"),
-                    _kv("phase", str(failure.get("phase", "unknown")), indent=2),
-                    _kv("error", str(failure.get("error_type", "Error")), indent=2),
-                    _kv("message", str(failure.get("message", "")), indent=2),
-                    _kv("elapsed", f"{float(failure.get('elapsed_seconds', 0.0)):.3f}s", indent=2),
-                ]
-            )
-            if failure.get("timeout_seconds") is not None:
-                lines.append(_kv("timeout", f"{float(failure['timeout_seconds']):.3f}s", indent=2))
-        if deterministic:
-            lines.extend(_bullets("deterministic failures", deterministic))
-        if rubric_failures:
-            lines.extend(_bullets("rubric failures", rubric_failures))
-        if rubric_passes and not compact:
-            lines.extend(_bullets("rubric passes", rubric_passes))
-
-        judge = case.get("judge")
-        if isinstance(judge, dict):
-            verdict = _format_judge_verdict(str(judge.get("deterministic_score_fit", "-")))
-            lines.append(_kv("Judge Verdict", verdict))
-            quality_note = judge.get("quality_note")
-            if isinstance(quality_note, str) and quality_note.strip():
-                lines.append(_kv("Judge Note", quality_note, indent=2))
-            deterministic_notes = list(judge.get("deterministic_notes") or [])
-            if deterministic_notes and not compact:
-                lines.extend(_bullets("judge on deterministic scoring", deterministic_notes))
-        elif not compact:
-            lines.append(_kv("judge", "not present in this saved result", indent=2))
-
+        if prompt_trunc or resp_trunc:
+            lines.append("  [truncated; use --full]")
         workspace = case.get("workspace")
         if isinstance(workspace, dict):
-            changed_files = list(workspace.get("changed_files") or [])
-            lines.append(_kv("fixture", str(case.get("fixture", "-"))))
-            lines.append(
-                _kv(
-                    "changed files",
-                    ", ".join(changed_files) if changed_files else "none",
-                )
-            )
-            stop_reason = workspace.get("conversation_stop_reason")
-            if stop_reason:
-                lines.append(_kv("conversation stop", str(stop_reason)))
-            file_checks = list(workspace.get("file_checks") or [])
-            if file_checks and not compact:
-                lines.append("  file checks:")
-                for entry in file_checks:
-                    status = str(entry.get("status", "?")).upper()
-                    path = str(entry.get("path", "workspace"))
-                    check = str(entry.get("check", ""))
-                    lines.append(_kv(f"[{status}] {path}", check, indent=4))
-            tool_summary = case.get("tool_summary")
-            if isinstance(tool_summary, dict):
-                lines.append(_kv("tool calls", str(tool_summary.get("total_calls", 0))))
-                lines.append(_kv("invalid tool calls", str(tool_summary.get("invalid_calls", 0))))
-            tool_trace = list(case.get("tool_trace") or [])
-            if tool_trace and not compact:
-                lines.append("  tool trace:")
-                for item in tool_trace:
-                    header = f"step {item.get('step', '?')}: {item.get('tool', 'tool')}"
-                    validity = "ok" if item.get("valid") else "invalid"
-                    lines.append(_kv(header, validity, indent=4))
-                    error = item.get("error")
-                    if error:
-                        lines.append(_kv("error", str(error), indent=6))
-                    preview = item.get("result_preview")
-                    if preview:
-                        lines.append(_kv("result", str(preview), indent=6))
+            changed = ", ".join(workspace.get("changed_files") or []) or "none"
+            lines.append(_kv("changed files", changed, indent=2, width=WIDTH))
+            failing_checks = [
+                f"{entry.get('path', 'workspace')}: {entry.get('check', '')}"
+                for entry in (workspace.get("file_checks") or [])
+                if str(entry.get("status", "")).lower() != "pass"
+            ]
+            if failing_checks:
+                lines.append(_kv("failing file checks", " | ".join(failing_checks), indent=2, width=WIDTH))
 
-        response = str(case.get("response", ""))
-        lines.extend(_response_block(response, max_chars=220 if compact else 420))
-        lines.append("")
-        lines.append(" " + "·" * 76)
-        lines.append("")
+    lines.extend(["", _rule("🧪 JUDGE-FLAGGED", width=WIDTH), _kv("count", str(len(flagged_cases)), indent=0, width=WIDTH)])
+    for case in flagged_cases:
+        cid = str(case.get("id", "?"))
+        flag = judge_flags.get(cid, {})
+        prompt, prompt_trunc = _truncate(str(case.get("prompt", "")))
+        response, resp_trunc = _truncate(str(case.get("response", "")))
+        lines.extend(
+            [
+                "",
+                f"⚑ {cid} · {case.get('group', '-')} · score {float(case.get('score', 0.0)):.3f}",
+                _kv("judge flag", str(flag.get("note") or "flagged"), width=WIDTH),
+                _kv("quote", str(flag.get("quote") or ""), indent=2, width=WIDTH),
+                "  prompt:",
+                _wrap_block(prompt),
+                "  response:",
+                _wrap_block(response),
+            ]
+        )
+        if prompt_trunc or resp_trunc:
+            lines.append("  [truncated; use --full]")
+
+    if not failure_cases and not flagged_cases:
+        lines.extend(["", _kv("result", "no cases matched the current filters", indent=0, width=WIDTH)])
     return "\n".join(lines).rstrip()
