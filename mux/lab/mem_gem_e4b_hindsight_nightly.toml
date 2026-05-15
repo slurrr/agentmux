@@ -1,0 +1,127 @@
+[stack]
+name = "mem_gem_hs_nightly"
+track = "lab"
+primary_service = "llm"
+notes = "EXPERIMENTAL: Same as mem_gem_hs, but runs vLLM from .venv-vllm-nightly for nightly/source builds (Gemma4 assistant speculative decoding experiments)."
+
+[defaults]
+host = "0.0.0.0"
+
+[defaults.args]
+dtype = "bfloat16"
+# Leave VRAM headroom for Hindsight's local embeddings + reranker when running on GPU.
+# NOTE: vLLM KV cache size scales roughly with this; we target ~max_model_len worth of KV cache.
+gpu_memory_utilization = 0.84
+# Keep concurrency lower for memory workloads to reduce tail latency and
+# avoid backpressure when GPU is busy with other services.
+max_num_seqs = 36
+tensor_parallel_size = 1
+
+[services.llm]
+engine = "vllm"
+runtime_bin_dir = ".venv-vllm-nightly/bin"
+model = "${MODEL_ROOT}/hf-snapshots/gemma-4-e4b-it/current"
+port = 8002
+served_model_name = "gemma-4-e4b-memory"
+# Prevent clients (e.g. OpenWebUI) from overriding the server chat template/
+# kwargs via request fields. We want one stable memory-serving profile.
+extra_args = ["--disable-uvicorn-access-log", "--no-trust-request-chat-template"]
+
+[services.llm.env]
+CUDA_VISIBLE_DEVICES = "0"
+VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS = "1"
+PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+
+[services.llm.args]
+# Force Gemma4 to run in text-only mode (disables multimodal modalities).
+# This also unblocks draft-model speculative decoding, which currently
+# does not support multimodal models.
+language_model_only = true
+
+enable_prefix_caching = true
+max_model_len = 131072
+# Speculative decoding (Gemma assistant draft model).
+# vLLM expects SpeculativeConfig JSON.
+# Note: this adds a second model; verify VRAM and behavior with xgrammar.
+speculative_config = '{"method": "mtp","model":"/home/poop/models/hf/hub/models--google--gemma-4-E4B-it-assistant/snapshots/4a5c666f89be588c72e0b3a9b49c118513cedff6","num_speculative_tokens":4}'
+# Memory retain/consolidation does not need tool calling; disabling reduces
+# parser/tooling surface area and tends to improve structured-output stability.
+enable_auto_tool_choice = false
+tool_call_parser = "gemma4"
+reasoning_parser = "gemma4"
+exclude_tools_when_tool_choice_none = true
+enable_force_include_usage = true
+chat_template_content_format = "openai"
+# Hindsight memory work wants more boring / schema-clean defaults than the normal
+# interactive Gemma profile. Start low, not zero, and A/B against 0.0 if needed.
+generation_config = "auto"
+override_generation_config = '{"temperature":0.2,"top_p":0.95,"top_k":20,"repetition_penalty":1.0}'
+# Memory runs are extremely sensitive to "thinking" verbosity/latency.
+# Default to thinking OFF at the server layer; if we later want thinking for
+# interactive chat, we can do it in a separate mux or via per-request overrides.
+default_chat_template_kwargs = "{\"enable_thinking\":false}"
+
+# Structured outputs: use xgrammar for schema cleanliness.
+# NOTE: we previously saw issues when disable_any_whitespace=true. Keep it false
+# for stability; revisit after we confirm schema adherence is good enough.
+structured_outputs_config = '{"backend":"xgrammar","reasoning_parser":"gemma4","enable_in_reasoning":false,"disable_any_whitespace":false}'
+kv_cache_dtype = "fp8_e4m3"
+# Required for gemma-4-e4b-it-assistant draft model architecture.
+trust_remote_code = true
+
+[services.llm.assets]
+chat_template = "assets/chat_templates/tool_chat_template_gemma4.jinja"
+
+[services.memory]
+engine = "hindsight"
+host = "127.0.0.1"
+port = 8888
+runtime_bin_dir = ".venv-hindsight/bin"
+data_dir = "${HINDSIGHT_DATA_ROOT}"
+llm_service = "llm"
+
+[services.memory.env]
+# Retrieval models: revert to Hindsight defaults while we profile.
+HINDSIGHT_API_EMBEDDINGS_PROVIDER = "local"
+HINDSIGHT_API_EMBEDDINGS_LOCAL_FORCE_CPU = "false"
+
+HINDSIGHT_API_RERANKER_PROVIDER = "local"
+HINDSIGHT_API_RERANKER_LOCAL_FORCE_CPU = "false"
+HINDSIGHT_API_RERANKER_LOCAL_BUCKET_BATCHING = "false"
+HINDSIGHT_API_RERANKER_LOCAL_BATCH_SIZE = "32"
+HINDSIGHT_API_RERANKER_LOCAL_MAX_CONCURRENT = "4"
+HINDSIGHT_API_RERANKER_MAX_CANDIDATES = "300"
+HINDSIGHT_API_LAZY_RERANKER = "false"
+
+# Pin retain/consolidation explicitly onto the memory-served Gemma profile.
+HINDSIGHT_API_RETAIN_LLM_PROVIDER = "openai"
+HINDSIGHT_API_RETAIN_LLM_MODEL = "gemma-4-e4b-memory"
+HINDSIGHT_API_CONSOLIDATION_LLM_PROVIDER = "openai"
+HINDSIGHT_API_CONSOLIDATION_LLM_MODEL = "gemma-4-e4b-memory"
+
+# Throughput/stability trade: keep calls smaller so Gemma spends less time in the
+# huge-prompt / multi-call failure lane that showed up in prior logs.
+# Consolidation: revert to Hindsight defaults while we profile real workloads.
+HINDSIGHT_API_CONSOLIDATION_LLM_BATCH_SIZE = "8"
+HINDSIGHT_API_CONSOLIDATION_LLM_BATCH_SIZE = "8"
+HINDSIGHT_API_CONSOLIDATION_MAX_MEMORIES_PER_ROUND = "100"
+HINDSIGHT_API_CONSOLIDATION_RECALL_BUDGET = "low"
+HINDSIGHT_API_CONSOLIDATION_MAX_TOKENS = "512"
+HINDSIGHT_API_CONSOLIDATION_SOURCE_FACTS_MAX_TOKENS = "4096"
+HINDSIGHT_API_CONSOLIDATION_SOURCE_FACTS_MAX_TOKENS_PER_OBSERVATION = "256"
+
+# Concurrency/timeout tuning for reliability during profiling:
+# - cap retain concurrency to avoid vLLM slowdowns/queueing during tool loops
+# - set generous timeouts to avoid spurious retries while we gather data
+HINDSIGHT_API_RETAIN_LLM_MAX_CONCURRENT = "8"
+
+# Global + per-operation timeouts (defaults to 120s if unset)
+HINDSIGHT_API_LLM_TIMEOUT = "600"
+HINDSIGHT_API_WORKER_POLLER_TIMEOUT = "666"
+HINDSIGHT_API_RETAIN_LLM_TIMEOUT = "600"
+HINDSIGHT_API_CONSOLIDATION_LLM_TIMEOUT = "600"
+
+# Worker slots still help overlap banks / retain / other operations, even though
+# one bank's consolidation lane is serial inside Hindsight.
+HINDSIGHT_API_WORKER_CONSOLIDATION_MAX_SLOTS = "8"
+HINDSIGHT_API_WORKER_MAX_SLOTS = "20"

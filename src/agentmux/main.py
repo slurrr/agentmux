@@ -9,8 +9,9 @@ from pathlib import Path
 from agentmux import __version__
 from agentmux.bench import BenchmarkError, run_benchmark
 from agentmux.bench_report import read_result, render_detailed_report
-from agentmux.bench_session import BenchSessionError, DEFAULT_REPO, run_bench_session
+from agentmux.bench_session import DEFAULT_REPO, BenchSessionError, run_bench_session
 from agentmux.config import STACK_ROOT, list_stacks, resolve_stack
+from agentmux.onboard import OnboardingError, onboard_model, render_onboard_summary
 from agentmux.runner import build_stack_plan, launch_stack
 from agentmux.runtime import (
     load_history,
@@ -160,6 +161,48 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Preserve session worktree instead of tearing down on success",
     )
+
+    onboard_parser = subparsers.add_parser("onboard", help="Onboard a new model from HF cache")
+    onboard_parser.add_argument("source", type=Path, help="HF cache path or snapshot directory")
+    onboard_parser.add_argument("--name", help="Optional stack/model slug")
+    onboard_parser.add_argument(
+        "--track",
+        default="lab",
+        choices=["core", "lab", "bench", "archive"],
+        help="Mux track for the generated manifest",
+    )
+    onboard_parser.add_argument(
+        "--instructions",
+        help="Freeform onboarding instructions to record in the manifest",
+    )
+    onboard_parser.add_argument(
+        "--service",
+        action="append",
+        choices=["memory"],
+        default=[],
+        help="Add an extra service to the generated mux (repeatable)",
+    )
+    onboard_parser.add_argument(
+        "--no-launch",
+        action="store_true",
+        help="Do not try to launch the generated stack",
+    )
+    onboard_parser.add_argument(
+        "--no-smoke",
+        action="store_true",
+        help="Skip the smoke evaluation step",
+    )
+    onboard_parser.add_argument(
+        "--bench",
+        action="store_true",
+        help="Run the benchmark profile after onboarding",
+    )
+    onboard_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing pointers/manifests if needed",
+    )
+    onboard_parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
     subparsers.add_parser("version", help="Print the CLI version")
     return parser
@@ -510,6 +553,27 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             raise SystemExit(f"bench-session failed: {exc}") from exc
         print(message)
+        return 0
+
+    if args.command == "onboard":
+        try:
+            result = onboard_model(
+                args.source,
+                stack_name=args.name,
+                track=args.track,
+                instructions=args.instructions,
+                services=list(args.service),
+                launch=not args.no_launch,
+                smoke=not args.no_smoke,
+                bench=args.bench,
+                force=args.force,
+            )
+        except OnboardingError as exc:
+            raise SystemExit(str(exc)) from exc
+        if args.json:
+            print(json.dumps(result.__dict__, indent=2))
+        else:
+            print(render_onboard_summary(result), end="")
         return 0
 
     if args.command == "version":

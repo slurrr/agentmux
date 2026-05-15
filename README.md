@@ -32,6 +32,7 @@ This repo exists to:
 - define or edit a mux manifest
 - inspect the rendered command
 - launch it from the CLI or from a UI such as VS Code
+- onboard a new model from HF cache with `agentmux onboard <source>`
 - point agent frontends at the running backend
 
 ## Setup
@@ -59,6 +60,7 @@ uv pip install --python .venv-hindsight/bin/python 'hindsight-all==0.5.6' pg0-em
 .venv-vllm/bin/agentmux status
 .venv-vllm/bin/agentmux smoke qwen3_5_9b --json
 .venv-vllm/bin/agentmux history
+.venv-vllm/bin/agentmux onboard ~/models/hf/hub/models--Qwen--Qwen3.5-9B --service memory
 ```
 
 ## Runtime Model

@@ -1,0 +1,125 @@
+[stack]
+name = "example_llamacpp_gguf"
+track = "examples"
+primary_service = "llm"
+notes = "Example shape for serving a GGUF model via llama.cpp (llama-server) with an OpenAI-compatible /v1 API."
+
+# -----------------------------------------------------------------------------
+# IMPORTANT
+# -----------------------------------------------------------------------------
+# This example is a *reference manifest* for a future agentmux engine such as:
+#   engine = "llamacpp"
+#
+# At the time of writing, agentmux only supports engine = "vllm" and "hindsight".
+# This file exists so you can:
+# - see the flags you may want
+# - copy/paste into a future stack once engine support is added
+#
+# The flags below are passed in raw CLI form via extra_args so they stay faithful
+# to llama-server's real CLI surface.
+
+[defaults]
+# llama-server accepts 0.0.0.0, 127.0.0.1, etc.
+host = "127.0.0.1"
+
+# -----------------------------------------------------------------------------
+# NOTE: This file must remain *parseable* by the current agentmux code.
+# agentmux v1 only supports engine = "vllm" and "hindsight".
+#
+# So the llama.cpp content below is stored under [llamacpp] (a top-level table
+# agentmux ignores) and the required [services.llm] entry is a harmless stub.
+# -----------------------------------------------------------------------------
+
+[services.llm]
+# Stub service so this manifest loads under current agentmux.
+# Once agentmux gains engine = "llamacpp", you would move the [llamacpp.service]
+# fields into this [services.llm] table.
+engine = "vllm"
+runtime_bin_dir = ".venv-vllm/bin"
+model = "DUMMY_MODEL_DO_NOT_LAUNCH"
+host = "127.0.0.1"
+port = 18080
+
+[llamacpp.service]
+# Proposed future engine name:
+# engine = "llamacpp"
+
+# If llama-server is installed on PATH (e.g. ~/.local/bin/llama-server), you can
+# omit runtime_bin_dir once agentmux supports this engine.
+runtime_bin_dir = "~/.local/bin"
+
+# Path to a GGUF model. This example uses an HF hub cached GGUF.
+model = "/home/poop/models/hf/hub/models--unsloth--Qwen3.5-4B-GGUF/snapshots/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-UD-Q4_K_XL.gguf"
+
+# LLM service bind host+port.
+host = "127.0.0.1"
+port = 18080
+
+# Optional stable model name for clients.
+served_model_name = "qwen3.5-4b-gguf"
+
+[llamacpp.service.env]
+CUDA_VISIBLE_DEVICES = "0"
+
+# -----------------------------------------------------------------------------
+# llama-server flags (menu)
+# -----------------------------------------------------------------------------
+# Stored under [llamacpp] so it doesn't get interpreted as vLLM flags.
+
+llamacpp.service.extra_args = [
+  # -------------------------
+  # Network / API surface
+  # -------------------------
+  # "--api-prefix", "/v1",
+  # "--api-key", "dummy",
+
+  # -------------------------
+  # Performance / concurrency
+  # -------------------------
+  "--threads", "8",
+  # "--threads-batch", "8",
+  # "--parallel", "4",
+
+  # -------------------------
+  # Context length / memory
+  # -------------------------
+  "--ctx-size", "8192",
+  # "--keep", "0",
+  # "--no-cache-prompt",
+
+  # -------------------------
+  # GPU offload
+  # -------------------------
+  "--n-gpu-layers", "all",
+  # "--device", "0",
+  # "--flash-attn", "auto",
+
+  # -------------------------
+  # Chat templating / reasoning
+  # -------------------------
+  # "--chat-template", "chatml",
+  # "--chat-template-file", "assets/chat_templates/your_template.jinja",
+  # "--chat-template-kwargs", '{"enable_thinking":false}',
+  # "--reasoning", "off",
+
+  # -------------------------
+  # Structured output
+  # -------------------------
+  # "--json-schema-file", "assets/schemas/your_schema.json",
+  # "--grammar-file", "assets/grammars/your_grammar.gbnf",
+]
+
+# -----------------------------------------------------------------------------
+# Assets (proposed mapping for llama.cpp)
+# -----------------------------------------------------------------------------
+# agentmux currently maps assets.chat_template -> vLLM's --chat-template.
+# llama-server supports --chat-template-file, so a future llama.cpp integration
+# could map assets.chat_template to that flag (or keep it engine-specific).
+#
+# For now this is just a hint for future engine wiring.
+[services.llm.assets]
+# chat_template = "assets/chat_templates/example_llamacpp_chat.jinja"
+
+# Tokenizer assets are typically not used for llama.cpp in the same way as vLLM,
+# but you can keep the field here as a placeholder if you want.
+# tokenizer = "assets/tokenizers/..."

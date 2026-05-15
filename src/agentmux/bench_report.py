@@ -84,6 +84,28 @@ def _rule(title: str, width: int = 78, fill: str = "=") -> str:
     return line[:width]
 
 
+def _section(title: str, width: int = 80) -> list[str]:
+    return ["-" * width, f" {title}", "-" * width]
+
+
+def _table(headers: list[str], rows: list[list[str]]) -> list[str]:
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def sep(ch: str = "-") -> str:
+        return "+" + "+".join(ch * (w + 2) for w in widths) + "+"
+
+    out = [sep("-")]
+    out.append("| " + " | ".join(h.ljust(widths[i]) for i, h in enumerate(headers)) + " |")
+    out.append(sep("="))
+    for row in rows:
+        out.append("| " + " | ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)) + " |")
+    out.append(sep("-"))
+    return out
+
+
 def _kv(label: str, value: str, *, indent: int = 2, width: int = 78) -> str:
     prefix = " " * indent + f"{label}: "
     wrapped = textwrap.fill(
@@ -260,21 +282,6 @@ def render_summary(result: dict[str, Any], result_path: Path) -> str:
         pct = (f / total * 100.0) if total else 0.0
         return f"{f}/{total} ({pct:.1f}%)"
 
-    def grid(headers: list[str], rows: list[list[str]]) -> list[str]:
-        widths = [len(h) for h in headers]
-        for row in rows:
-            for i, cell in enumerate(row):
-                widths[i] = max(widths[i], len(cell))
-        top = "┌" + "┬".join("─" * (w + 2) for w in widths) + "┐"
-        sep = "├" + "┼".join("─" * (w + 2) for w in widths) + "┤"
-        bot = "└" + "┴".join("─" * (w + 2) for w in widths) + "┘"
-        head = "│ " + " │ ".join(h.ljust(widths[i]) for i, h in enumerate(headers)) + " │"
-        out = [top, head, sep]
-        for row in rows:
-            out.append("│ " + " │ ".join(str(c).ljust(widths[i]) for i, c in enumerate(row)) + " │")
-        out.append(bot)
-        return out
-
     summary = result["summary"]
     categories = summary["categories"]
     quality_no_tools = categories.get("quality_no_tools", {})
@@ -307,62 +314,65 @@ def render_summary(result: dict[str, Any], result_path: Path) -> str:
     if isinstance(audit, dict) and isinstance(audit.get("judge_review"), list):
         judge_flagged_count = sum(1 for item in audit["judge_review"] if isinstance(item, dict) and bool(item.get("flag")))
 
-    lines = [
-        _rule(f"🚀 BENCHMARK: {result['stack']['name']} ({result['profile']})", width=WIDTH),
-        _kv("status", str(run.get("status", "unknown")).upper(), indent=0, width=WIDTH),
-        _kv("failures", str(failed_count), indent=0, width=WIDTH),
-        _kv("judge flagged", str(judge_flagged_count), indent=0, width=WIDTH),
-        _kv("result", str(result_path), indent=0, width=WIDTH),
-        _kv("model", str(declared.get("model") or run.get("model") or "n/a"), indent=0, width=WIDTH),
-        _kv("served model", str(declared.get("served_model_name") or "n/a"), indent=0, width=WIDTH),
-        _kv("dtype", str(declared_args.get("dtype") or "auto"), indent=0, width=WIDTH),
-        _kv("kv cache dtype", str(declared_args.get("kv_cache_dtype") or "n/a"), indent=0, width=WIDTH),
-        _kv("max model len", str(declared_args.get("max_model_len") or "n/a"), indent=0, width=WIDTH),
-    ]
+    lines = []
+    lines.append("=" * WIDTH)
+    lines.append(f" BENCH REPORT: {result['stack']['name']} ({result['profile']})")
+    lines.append("=" * WIDTH)
+
+    lines.extend(
+        [
+            _kv("Status", str(run.get("status", "unknown")).upper(), indent=0, width=WIDTH),
+            _kv("Failures", str(failed_count), indent=0, width=WIDTH),
+            _kv("Judge Flagged", str(judge_flagged_count), indent=0, width=WIDTH),
+            _kv("Result", str(result_path), indent=0, width=WIDTH),
+            _kv("Model", str(declared.get("model") or run.get("model") or "n/a"), indent=0, width=WIDTH),
+            _kv("Served Model", str(declared.get("served_model_name") or "n/a"), indent=0, width=WIDTH),
+            _kv("DType", str(declared_args.get("dtype") or "auto"), indent=0, width=WIDTH),
+            _kv("KV Cache DType", str(declared_args.get("kv_cache_dtype") or "n/a"), indent=0, width=WIDTH),
+            _kv("Max Model Len", str(declared_args.get("max_model_len") or "n/a"), indent=0, width=WIDTH),
+        ]
+    )
     if isinstance(max_num_seqs_override, dict):
         lines.append(
             _kv(
-                "bench override",
+                "Bench Override",
                 f"max-num-seqs: {max_num_seqs_override.get('before')} -> {max_num_seqs_override.get('after')}",
                 indent=0,
                 width=WIDTH,
             )
         )
 
-    lines.extend(["", _rule("📊 PERF (ENDPOINT)", fill="-", width=WIDTH)])
+    lines.extend(_section("PERF (ENDPOINT)", width=WIDTH))
     if not perf_summary:
-        lines.append(_kv("perf", "missing for this run (old format or perf failed)", indent=0, width=WIDTH))
+        lines.append(" perf: missing for this run (old format or perf failed)")
     elif not perf_summary.get("available", False):
-        lines.append(_kv("perf", f"unavailable: {perf_summary.get('reason')}", indent=0, width=WIDTH))
+        lines.append(f" perf: unavailable ({perf_summary.get('reason')})")
     else:
+        lines.append(f" provenance: vllm={perf_summary.get('vllm_version')} module={perf_summary.get('module')}")
         lane_a = perf_summary.get("lane_metrics", {}).get("lane_a", {})
         lane_b = perf_summary.get("lane_metrics", {}).get("lane_b", {})
         a_completed = lane_a.get("completed", lane_a.get("completed_requests"))
         a_failed = lane_a.get("failed", lane_a.get("failed_requests"))
 
-        lines.append(_kv("provenance", f"vllm={perf_summary.get('vllm_version')} module={perf_summary.get('module')}", indent=0, width=WIDTH))
         lines.append("")
-        lines.extend(grid(
-            ["Lane A", "Value"],
-            [
-                ["req/s", fmt_num(lane_a.get("request_throughput"))],
-                ["tok/s", fmt_num(lane_a.get("output_throughput"))],
-                ["total tok/s", fmt_num(lane_a.get("total_token_throughput"))],
-                ["TTFT mean", fmt_num(lane_a.get("mean_ttft_ms"), "ms")],
-                ["TTFT p99", fmt_num(lane_a.get("p99_ttft_ms"), "ms")],
-                ["TPOT mean", fmt_num(lane_a.get("mean_tpot_ms"), "ms")],
-                ["ITL mean", fmt_num(lane_a.get("mean_itl_ms"), "ms")],
-                ["Duration", fmt_num(lane_a.get("duration"), "s")],
-                ["Errors", err_rate(a_completed, a_failed)],
-            ],
-        ))
-        lines.append("")
-        rows = []
+        lines.extend(_table(["Lane A Metric", "Value"], [
+            ["req/s", fmt_num(lane_a.get("request_throughput"))],
+            ["tok/s", fmt_num(lane_a.get("output_throughput"))],
+            ["total tok/s", fmt_num(lane_a.get("total_token_throughput"))],
+            ["TTFT mean", fmt_num(lane_a.get("mean_ttft_ms"), "ms")],
+            ["TTFT p99", fmt_num(lane_a.get("p99_ttft_ms"), "ms")],
+            ["TPOT mean", fmt_num(lane_a.get("mean_tpot_ms"), "ms")],
+            ["ITL mean", fmt_num(lane_a.get("mean_itl_ms"), "ms")],
+            ["Duration", fmt_num(lane_a.get("duration"), "s")],
+            ["Errors", err_rate(a_completed, a_failed)],
+        ]))
+
+        b_rows: list[list[str]] = []
         for level in (2, 4, 8, 16):
             row = lane_b.get(str(level), {}) if isinstance(lane_b, dict) else {}
             completed = row.get("completed", row.get("completed_requests"))
             failed = row.get("failed", row.get("failed_requests"))
-            rows.append([
+            b_rows.append([
                 str(level),
                 fmt_num(row.get("request_throughput")),
                 fmt_num(row.get("output_throughput")),
@@ -370,20 +380,21 @@ def render_summary(result: dict[str, Any], result_path: Path) -> str:
                 fmt_num(row.get("p99_ttft_ms"), "ms"),
                 err_rate(completed, failed),
             ])
-        lines.extend(grid(["Conc", "req/s", "tok/s", "TTFT mean", "TTFT p99", "Errors"], rows))
+        lines.append("")
+        lines.extend(_table(["Conc", "req/s", "tok/s", "TTFT mean", "TTFT p99", "Errors"], b_rows))
 
-    lines.extend(["", _rule("✅ PROMPT BENCH", fill="-", width=WIDTH)])
+    lines.extend(_section("PROMPT BENCH", width=WIDTH))
     lines.extend(
-        grid(
+        _table(
             ["Metric", "Value"],
             [
                 ["Drills (no-tools)", f"{quality_no_tools.get('passed_cases', 0)}/{quality_no_tools.get('total_cases', 0)} passed"],
                 ["Workspace/tool outcomes", f"{quality_with_tools.get('passed_cases', 0)}/{quality_with_tools.get('total_cases', 0)} passed"],
                 ["Invalid tool calls", str(quality_with_tools.get("invalid_tool_calls", 0))],
+                ["Prompt Reference", "docs/reference/bench-prompts.md"],
             ],
         )
     )
-    lines.append(_kv("prompt reference", "docs/reference/bench-prompts.md", indent=0, width=WIDTH))
     return "\n".join(lines)
 
 
@@ -959,7 +970,7 @@ def render_detailed_report(
     if judge_flagged_only:
         failure_cases = []
 
-    lines = ["", "", summary, "", _rule("⚠ FAILURES", width=WIDTH), _kv("count", str(len(failure_cases)), indent=0, width=WIDTH)]
+    lines = ["", "", summary, "", _rule("FAILURES", width=WIDTH), _kv("count", str(len(failure_cases)), indent=0, width=WIDTH)]
 
     def _truncate(text: str) -> tuple[str, bool]:
         if max_chars is None or len(text) <= max_chars:
@@ -982,7 +993,7 @@ def render_detailed_report(
         lines.extend(
             [
                 "",
-                f"✖ {cid} · {case.get('group', '-')} · score {float(case.get('score', 0.0)):.3f}",
+                f"[FAIL] {cid} | {case.get('group', '-')} | score {float(case.get('score', 0.0)):.3f}",
                 _kv("deterministic failures", ", ".join(case.get("deterministic_failures") or []) or "none", width=WIDTH),
                 "  prompt:",
                 _wrap_block(prompt),
@@ -1004,7 +1015,7 @@ def render_detailed_report(
             if failing_checks:
                 lines.append(_kv("failing file checks", " | ".join(failing_checks), indent=2, width=WIDTH))
 
-    lines.extend(["", _rule("🧪 JUDGE-FLAGGED", width=WIDTH), _kv("count", str(len(flagged_cases)), indent=0, width=WIDTH)])
+    lines.extend(["", _rule("JUDGE-FLAGGED", width=WIDTH), _kv("count", str(len(flagged_cases)), indent=0, width=WIDTH)])
     for case in flagged_cases:
         cid = str(case.get("id", "?"))
         flag = judge_flags.get(cid, {})
@@ -1013,7 +1024,7 @@ def render_detailed_report(
         lines.extend(
             [
                 "",
-                f"⚑ {cid} · {case.get('group', '-')} · score {float(case.get('score', 0.0)):.3f}",
+                f"[FLAG] {cid} | {case.get('group', '-')} | score {float(case.get('score', 0.0)):.3f}",
                 _kv("judge flag", str(flag.get("note") or "flagged"), width=WIDTH),
                 _kv("quote", str(flag.get("quote") or ""), indent=2, width=WIDTH),
                 "  prompt:",

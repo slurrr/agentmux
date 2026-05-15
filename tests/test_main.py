@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from agentmux.main import main
+from agentmux.onboard import OnboardResult
 from agentmux.runtime import RuntimeService, RuntimeStack
 
 
@@ -27,6 +28,36 @@ def test_list_outputs_track_prefixed_stacks(capsys) -> None:
     assert "examples/example_vllm_recipes" in captured.out
     assert "examples/example_two_service" in captured.out
     assert "examples/example_bench_mux" in captured.out
+
+
+def test_onboard_cli_dispatch(monkeypatch, capsys) -> None:
+    result = OnboardResult(
+        requested_source="/cache/model",
+        resolved_source="/cache/model/snapshots/abc",
+        slug="demo-model",
+        stack_name="demo-model",
+        track="lab",
+        local_model_path="/models/local/hf-snapshots/demo-model/current",
+        active_model_path="/models/active/demo-model",
+        manifest_path="mux/lab/demo-model.toml",
+        model_manifest_path="/models/manifests/demo-model.md",
+        onboarding_dir="/runs/agentmux/onboarding/demo-model",
+        launch_attempted=True,
+        launch_performed=False,
+        smoke={"ok": True},
+        benchmark=None,
+        render={"stack": "demo-model", "services": []},
+        notes="note",
+        services=[],
+        created_at="2026-05-12T00:00:00Z",
+    )
+    monkeypatch.setattr("agentmux.main.onboard_model", lambda *args, **kwargs: result)
+    monkeypatch.setattr("agentmux.main.render_onboard_summary", lambda item: "onboard summary\n")
+
+    rc = main(["onboard", "/cache/model"])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "onboard summary" in captured.out
 
 
 def _serving_payload() -> dict[str, object]:
