@@ -186,9 +186,29 @@ llm_service = "main"
 
 Behavior:
 - `engine = "hindsight"` enables Hindsight launch for that service.
-- `llm_service` points at the in-stack vLLM service Hindsight should use for retain/recall/reflect calls.
+- `llm_service` points at an in-stack OpenAI-compatible LLM service (`vllm` or `llamacpp`) Hindsight should use for retain/recall/reflect calls.
 - If no Hindsight service is declared, no Hindsight process is launched.
 - Hindsight launch settings are service-shaped, not sidecar-shaped.
+
+### llama.cpp (`llama-server`) as an engine
+You can run a GGUF-backed OpenAI-compatible service with `engine = "llamacpp"`.
+
+```toml
+[services.main]
+engine = "llamacpp"
+model = "/models/demo.gguf"
+host = "127.0.0.1"
+port = 18080
+extra_args = ["--n-gpu-layers", "all", "--ctx-size", "8192"]
+
+[services.main.assets]
+chat_template = "assets/chat_templates/demo.jinja" # -> --chat-template-file
+```
+
+Current operational mappings for `llamacpp`:
+- `assets.chat_template` -> `--chat-template-file`
+
+Other llama.cpp CLI flags are expressed via `args` (kebab-cased at render time) and `extra_args`.
 
 ### Multi-service stacks
 A stack can contain more than one service. That is useful for future team-style topologies even if you usually run one primary service today.

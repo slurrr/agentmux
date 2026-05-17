@@ -46,6 +46,76 @@ def test_build_stack_plan_handles_hindsight_service(mock_port_in_use) -> None:
     assert memory.env["HINDSIGHT_RUNTIME_BIN_DIR"] == runtime_bin_dir
 
 
+def test_build_stack_plan_renders_llamacpp_command(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    mux_root = tmp_path / "mux" / "lab"
+    mux_root.mkdir(parents=True)
+    (mux_root / "runtime_llamacpp.toml").write_text(
+        """
+[stack]
+name = "runtime_llamacpp"
+track = "lab"
+primary_service = "main"
+
+[services.main]
+engine = "llamacpp"
+runtime_bin_dir = ".local/bin"
+model = "/models/demo.gguf"
+host = "127.0.0.1"
+port = 18080
+served_model_name = "demo"
+extra_args = ["--threads", "8"]
+
+[services.main.assets]
+chat_template = "assets/chat_templates/demo.jinja"
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = build_stack_plan("runtime_llamacpp", root=tmp_path / "mux")
+    command = plan.services[0].command
+    assert command[0].endswith(".local/bin/llama-server")
+    assert "--host" in command and "127.0.0.1" in command
+    assert "--port" in command and "18080" in command
+    assert "-m" in command and "/models/demo.gguf" in command
+    assert "--chat-template-file" in command
+    assert "assets/chat_templates/demo.jinja" in command
+    assert "--alias" in command and "demo" in command
+    assert "--threads" in command and "8" in command
+
+
+def test_build_stack_plan_renders_llamacpp_hf_repo_command(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    mux_root = tmp_path / "mux" / "lab"
+    mux_root.mkdir(parents=True)
+    (mux_root / "runtime_llamacpp_hf.toml").write_text(
+        """
+[stack]
+name = "runtime_llamacpp_hf"
+track = "lab"
+primary_service = "main"
+
+[services.main]
+engine = "llamacpp"
+hf_repo = "unsloth/Qwen3.5-4B-GGUF"
+hf_file = "Qwen3.5-4B-UD-Q4_K_XL.gguf"
+host = "127.0.0.1"
+port = 18080
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    plan = build_stack_plan("runtime_llamacpp_hf", root=tmp_path / "mux")
+    command = plan.services[0].command
+    assert "--hf-repo" in command
+    assert "unsloth/Qwen3.5-4B-GGUF" in command
+    assert "--hf-file" in command
+    assert "Qwen3.5-4B-UD-Q4_K_XL.gguf" in command
+    assert "-m" not in command
+
+
 def test_build_stack_plan_uses_runtime_bin_dir_for_vllm(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     mux_root = tmp_path / "mux" / "lab"

@@ -15,11 +15,21 @@ def smoke_stack(stack: StackSpec) -> dict[str, object]:
     base_url = _base_url(service)
     model_name = service.served_model_name or service.model
 
-    health = request.urlopen(f"{base_url}/health", timeout=5)
-    health_body = health.read().decode("utf-8", errors="ignore")
+    health_status = 0
+    health_body = ""
+    try:
+        health = request.urlopen(f"{base_url}/health", timeout=5)
+        health_status = getattr(health, "status", 200)
+        health_body = health.read().decode("utf-8", errors="ignore")
+    except error.URLError:
+        # Some OpenAI-compatible servers do not implement /health.
+        pass
 
     models = request.urlopen(f"{base_url}/v1/models", timeout=5)
     models_payload = json.loads(models.read().decode("utf-8"))
+
+    if health_status == 0:
+        health_status = getattr(models, "status", 200)
 
     payload = json.dumps(
         {
@@ -41,7 +51,7 @@ def smoke_stack(stack: StackSpec) -> dict[str, object]:
     return {
         "service": service.name,
         "base_url": base_url,
-        "health_status": getattr(health, "status", 200),
+        "health_status": health_status,
         "health_body": health_body,
         "models": models_payload,
         "chat": chat_payload,

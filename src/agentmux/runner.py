@@ -47,9 +47,13 @@ class StackLaunchPlan:
     services: list[ServiceLaunchPlan]
 
 
-ASSET_FLAG_MAP = {
+VLLM_ASSET_FLAG_MAP = {
     "chat_template": "--chat-template",
     "tokenizer": "--tokenizer",
+}
+
+LLAMACPP_ASSET_FLAG_MAP = {
+    "chat_template": "--chat-template-file",
 }
 
 PRIMARY_STARTUP_TIMEOUT_SECONDS = 120.0
@@ -205,10 +209,10 @@ def _apply_flag_map(
         command.extend([flag, str(value)])
 
 
-def _apply_assets(command: list[str], service: ServiceSpec) -> set[str]:
+def _apply_assets(command: list[str], service: ServiceSpec, flag_map: dict[str, str]) -> set[str]:
     applied_keys: set[str] = set()
     assets = service.assets.values if service.assets is not None else {}
-    for key, flag in ASSET_FLAG_MAP.items():
+    for key, flag in flag_map.items():
         value = assets.get(key)
         if value:
             command.extend([flag, value])
@@ -247,12 +251,41 @@ def _build_vllm_command(
         ]
     if service.served_model_name:
         command.extend(["--served-model-name", service.served_model_name])
-    asset_keys = _apply_assets(command, service)
+    asset_keys = _apply_assets(command, service, VLLM_ASSET_FLAG_MAP)
     merged_args = dict(service.args or {})
     if arg_overrides:
         merged_args.update(arg_overrides)
     _apply_flag_map(command, merged_args, excluded_keys=asset_keys)
     _apply_loras(command, service.loras or [])
+    command.extend(service.extra_args or [])
+    return command
+
+
+def _build_llamacpp_command(service: ServiceSpec) -> list[str]:
+    if service.model is None and service.hf_repo is None:
+        raise ValueError(f"llamacpp service {service.name} is missing model or hf_repo")
+
+    runtime_bin_dir = _resolve_runtime_bin_dir(service.runtime_bin_dir)
+    executable = str(runtime_bin_dir / "llama-server") if runtime_bin_dir is not None else "llama-server"
+
+    command = [
+        executable,
+        "--host",
+        service.host,
+        "--port",
+        str(service.port),
+    ]
+    if service.hf_repo is not None:
+        command.extend(["--hf-repo", service.hf_repo])
+        if service.hf_file is not None:
+            command.extend(["--hf-file", service.hf_file])
+    elif service.model is not None:
+        command.extend(["-m", service.model])
+    if service.served_model_name:
+        command.extend(["--alias", service.served_model_name])
+
+    asset_keys = _apply_assets(command, service, LLAMACPP_ASSET_FLAG_MAP)
+    _apply_flag_map(command, dict(service.args or {}), excluded_keys=asset_keys)
     command.extend(service.extra_args or [])
     return command
 
@@ -296,11 +329,11 @@ def _build_hindsight_plan(stack: StackSpec, service: ServiceSpec, env: dict[str,
     if service.llm_service is None:
         raise ValueError(f"hindsight service {service.name} is missing llm_service")
     target = stack.services[service.llm_service]
-    if target.model is None:
+    if target.model is None and target.hf_repo is None:
         raise ValueError(
-            f"services.{service.name}.llm_service must reference a vllm service with a model"
+            f"services.{service.name}.llm_service must reference an LLM service with a model or hf_repo"
         )
-    llm_model = target.served_model_name or target.model
+    llm_model = target.served_model_name or target.model or target.hf_repo
     llm_base_url = _service_base_url(target.host, target.port)
 
     runtime_bin_dir = _resolve_runtime_bin_dir(service.runtime_bin_dir)
@@ -379,6 +412,20 @@ def build_stack_plan(
                     engine=service.engine,
                     env=env,
                     command=_build_vllm_command(service, arg_overrides=vllm_arg_overrides),
+                    port=service.port,
+                    host=service.host,
+                )
+            )
+            continue
+
+        if service.engine == "llamacpp":
+            services.append(
+                ServiceLaunchPlan(
+                    stack=stack.name,
+                    service=service_name,
+                    engine=service.engine,
+                    env=env,
+                    command=_build_llamacpp_command(service),
                     port=service.port,
                     host=service.host,
                 )
@@ -481,6 +528,48 @@ def _wait_for_vllm_ready(service: RuntimeService, host: str) -> bool:
     return _vllm_models_ready(host, service.port)
 
 
+def _llamacpp_models_ready(host: str, port: int) -> bool:
+    url = f"{_service_base_url(host, port)}/models"
+    try:
+        with urllib.request.urlopen(url, timeout=1.5) as response:
+            return response.status < 400
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return False
+
+
+def _wait_for_llamacpp_ready(service: RuntimeService, host: str) -> bool:
+    deadline = time.time() + PRIMARY_STARTUP_TIMEOUT_SECONDS
+    offset = 0
+    while time.time() < deadline:
+        offset, chunk = _drain_log_chunk(service.log_path, offset)
+        if chunk:
+            print(chunk, end="", flush=True)
+        if _llamacpp_models_ready(host, service.port):
+            return True
+        if not pid_is_running(service.pid):
+            return False
+        time.sleep(PRIMARY_STARTUP_POLL_SECONDS)
+    offset, chunk = _drain_log_chunk(service.log_path, offset)
+    if chunk:
+        print(chunk, end="", flush=True)
+    return _llamacpp_models_ready(host, service.port)
+    deadline = time.time() + PRIMARY_STARTUP_TIMEOUT_SECONDS
+    offset = 0
+    while time.time() < deadline:
+        offset, chunk = _drain_log_chunk(service.log_path, offset)
+        if chunk:
+            print(chunk, end="", flush=True)
+        if _vllm_models_ready(host, service.port):
+            return True
+        if not pid_is_running(service.pid):
+            return False
+        time.sleep(PRIMARY_STARTUP_POLL_SECONDS)
+    offset, chunk = _drain_log_chunk(service.log_path, offset)
+    if chunk:
+        print(chunk, end="", flush=True)
+    return _vllm_models_ready(host, service.port)
+
+
 def _hindsight_startup_timeout_seconds() -> float | None:
     raw = os.environ.get("AGENTMUX_HINDSIGHT_STARTUP_TIMEOUT_SECONDS", "").strip()
     if not raw:
@@ -526,9 +615,15 @@ def _wait_for_dependency(plan: StackLaunchPlan, runtime_services: list[RuntimeSe
             )
         return
 
-    raise RuntimeError(
-        f"Unsupported dependency readiness check in v1: {dependency_spec.engine}"
-    )
+    if dependency_spec.engine == "llamacpp":
+        if not _wait_for_llamacpp_ready(dependency_runtime, dependency_spec.host):
+            raise RuntimeError(
+                "Dependency service did not become ready before dependent startup. "
+                f"service={dependency_name} log={dependency_runtime.log_path}"
+            )
+        return
+
+    raise RuntimeError(f"Unsupported dependency readiness check in v1: {dependency_spec.engine}")
 
 
 def launch_stack(

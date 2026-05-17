@@ -40,6 +40,8 @@ class ServiceSpec:
     notes: str | None
     runtime_bin_dir: str | None = None
     model: str | None = None
+    hf_repo: str | None = None
+    hf_file: str | None = None
     served_model_name: str | None = None
     args: dict[str, FlagValue] | None = None
     extra_args: list[str] | None = None
@@ -283,6 +285,105 @@ def _service_from_vllm(
     )
 
 
+def _service_from_llamacpp(
+    name: str,
+    raw: dict[str, object],
+    defaults: dict[str, object],
+) -> ServiceSpec:
+    allowed_keys = {
+        "engine",
+        "model",
+        "hf_repo",
+        "hf_file",
+        "host",
+        "port",
+        "served_model_name",
+        "env",
+        "args",
+        "extra_args",
+        "assets",
+        "notes",
+        "runtime_bin_dir",
+    }
+    unknown = sorted(set(raw.keys()) - allowed_keys)
+    if unknown:
+        names = ", ".join(unknown)
+        raise ValueError(
+            f"services.{name} contains unsupported field(s) for engine='llamacpp': {names}"
+        )
+
+    model = raw.get("model")
+    hf_repo = raw.get("hf_repo")
+    hf_file = raw.get("hf_file")
+    served_model_name = raw.get("served_model_name")
+    runtime_bin_dir = raw.get("runtime_bin_dir")
+
+    if model is not None and (not isinstance(model, str) or not model):
+        raise ValueError(f"services.{name}.model must be a non-empty string")
+    if hf_repo is not None and (not isinstance(hf_repo, str) or not hf_repo):
+        raise ValueError(f"services.{name}.hf_repo must be a non-empty string")
+    if hf_file is not None and (not isinstance(hf_file, str) or not hf_file):
+        raise ValueError(f"services.{name}.hf_file must be a non-empty string")
+    if model is None and hf_repo is None:
+        raise ValueError(f"services.{name} must set either model or hf_repo")
+    if served_model_name is not None and not isinstance(served_model_name, str):
+        raise ValueError(f"services.{name}.served_model_name must be a string")
+    if runtime_bin_dir is not None and (not isinstance(runtime_bin_dir, str) or not runtime_bin_dir):
+        raise ValueError(f"services.{name}.runtime_bin_dir must be a non-empty string")
+
+    return ServiceSpec(
+        name=name,
+        engine="llamacpp",
+        host=_get_service_host(raw, defaults, name),
+        port=_get_service_port(raw, name),
+        env=_as_str_dict(
+            _merge_table_dict(defaults, raw, "env", "defaults.env", f"services.{name}.env"),
+            f"services.{name}.env",
+        ),
+        notes=_get_service_notes(raw, name),
+        runtime_bin_dir=(
+            _expand_env(runtime_bin_dir, f"services.{name}.runtime_bin_dir")
+            if runtime_bin_dir is not None
+            else None
+        ),
+        model=(
+            _expand_env(model, f"services.{name}.model")
+            if model is not None
+            else None
+        ),
+        hf_repo=(
+            _expand_env(hf_repo, f"services.{name}.hf_repo")
+            if hf_repo is not None
+            else None
+        ),
+        hf_file=(
+            _expand_env(hf_file, f"services.{name}.hf_file")
+            if hf_file is not None
+            else None
+        ),
+        served_model_name=(
+            _expand_env(served_model_name, f"services.{name}.served_model_name")
+            if served_model_name is not None
+            else None
+        ),
+        args=_as_flag_map(
+            _merge_table_dict(defaults, raw, "args", "defaults.args", f"services.{name}.args"),
+            f"services.{name}.args",
+        ),
+        extra_args=_as_str_list(raw.get("extra_args"), f"services.{name}.extra_args"),
+        assets=_as_assets(
+            _merge_table_dict(
+                defaults,
+                raw,
+                "assets",
+                "defaults.assets",
+                f"services.{name}.assets",
+            ),
+            f"services.{name}.assets",
+        ),
+    )
+
+
 def _service_from_hindsight(
     name: str,
     raw: dict[str, object],
@@ -348,6 +449,8 @@ def _service_from_data(
         raise ValueError(f"services.{name}.engine must be a non-empty string")
     if engine == "vllm":
         return _service_from_vllm(name, raw, defaults)
+    if engine == "llamacpp":
+        return _service_from_llamacpp(name, raw, defaults)
     if engine == "hindsight":
         return _service_from_hindsight(name, raw, defaults)
     raise ValueError(f"Unsupported engine in v1: {engine}")
@@ -420,9 +523,9 @@ def load_stack(path: Path) -> StackSpec:
                 f"services.{service_name}.llm_service must reference an existing service"
             )
         target = parsed_services[llm_service]
-        if target.engine != "vllm":
+        if target.engine not in {"vllm", "llamacpp"}:
             raise ValueError(
-                f"services.{service_name}.llm_service must reference a vllm service in v1"
+                f"services.{service_name}.llm_service must reference an LLM service (vllm or llamacpp)"
             )
 
     return StackSpec(

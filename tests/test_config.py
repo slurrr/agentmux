@@ -87,3 +87,99 @@ def test_resolve_stack_merges_default_assets() -> None:
     service = stack.services["reasoner"]
     assert service.assets.values["tokenizer"].endswith("/SharedTokenizer")
     assert service.assets.values["chat_template"] == "assets/chat_templates/deepseek_reasoning.jinja"
+
+
+def test_resolve_stack_supports_llamacpp_service_shape(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    mux_root = tmp_path / "mux" / "lab"
+    mux_root.mkdir(parents=True)
+    (mux_root / "llamacpp.toml").write_text(
+        """
+[stack]
+name = "llamacpp"
+track = "lab"
+primary_service = "main"
+
+[services.main]
+engine = "llamacpp"
+runtime_bin_dir = "~/.local/bin"
+model = "/models/demo.gguf"
+host = "127.0.0.1"
+port = 18080
+served_model_name = "demo-gguf"
+extra_args = ["--threads", "8"]
+
+[services.main.env]
+CUDA_VISIBLE_DEVICES = "0"
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stack = resolve_stack("llamacpp", root=tmp_path / "mux")
+    service = stack.services["main"]
+    assert service.engine == "llamacpp"
+    assert service.runtime_bin_dir == "~/.local/bin"
+    assert service.model == "/models/demo.gguf"
+    assert service.served_model_name == "demo-gguf"
+    assert service.extra_args == ["--threads", "8"]
+
+
+def test_resolve_stack_supports_llamacpp_hf_repo_shape(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    mux_root = tmp_path / "mux" / "lab"
+    mux_root.mkdir(parents=True)
+    (mux_root / "llamacpp_hf.toml").write_text(
+        """
+[stack]
+name = "llamacpp_hf"
+track = "lab"
+primary_service = "main"
+
+[services.main]
+engine = "llamacpp"
+hf_repo = "unsloth/Qwen3.5-4B-GGUF"
+hf_file = "Qwen3.5-4B-UD-Q4_K_XL.gguf"
+host = "127.0.0.1"
+port = 18080
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stack = resolve_stack("llamacpp_hf", root=tmp_path / "mux")
+    service = stack.services["main"]
+    assert service.hf_repo == "unsloth/Qwen3.5-4B-GGUF"
+    assert service.hf_file == "Qwen3.5-4B-UD-Q4_K_XL.gguf"
+    assert service.model is None
+
+
+def test_hindsight_llm_service_allows_llamacpp_target(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    mux_root = tmp_path / "mux" / "lab"
+    mux_root.mkdir(parents=True)
+    (mux_root / "hindsight_llamacpp.toml").write_text(
+        """
+[stack]
+name = "hindsight_llamacpp"
+track = "lab"
+primary_service = "main"
+
+[services.main]
+engine = "llamacpp"
+model = "/models/demo.gguf"
+host = "127.0.0.1"
+port = 18080
+
+[services.memory]
+engine = "hindsight"
+host = "127.0.0.1"
+port = 18888
+llm_service = "main"
+        """.strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    stack = resolve_stack("hindsight_llamacpp", root=tmp_path / "mux")
+    assert stack.services["memory"].llm_service == "main"
