@@ -39,7 +39,7 @@ This repo exists to:
 ```bash
 uv venv .venv-vllm
 uv pip install --python .venv-vllm/bin/python -e '.[dev]'
-uv pip install --python .venv-vllm/bin/python 'vllm==0.20.0'
+uv pip install --python .venv-vllm/bin/python 'vllm==0.21.0'
 
 uv venv .venv-hindsight
 uv pip install --python .venv-hindsight/bin/python 'hindsight-all==0.5.6' pg0-embedded

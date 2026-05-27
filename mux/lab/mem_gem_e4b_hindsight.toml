@@ -2,7 +2,7 @@
 name = "mem_gem_hs"
 track = "lab"
 primary_service = "llm"
-notes = "Gemma4-E4B Hindsight-first memory stack. Tuned to keep Gemma in a smaller, stricter structured-output lane for retain/consolidation instead of the broader agent-chat profile."
+notes = "Gemma4-E4B Hindsight-first memory stack on stable vLLM. Tuned to keep Gemma in a smaller, stricter structured-output lane for retain/consolidation instead of the broader agent-chat profile."
 
 [defaults]
 host = "0.0.0.0"
@@ -11,9 +11,7 @@ host = "0.0.0.0"
 dtype = "bfloat16"
 # Leave VRAM headroom for Hindsight's local embeddings + reranker when running on GPU.
 # NOTE: vLLM KV cache size scales roughly with this; we target ~max_model_len worth of KV cache.
-# Nightly + assistant speculative uses more VRAM (second model). We were OOM at 0.92
-# by ~16MiB (attempted alloc 36MiB with ~20MiB free). Back off slightly to leave
-# a small allocator safety margin.
+# Assistant speculative uses more VRAM (second model). We were OOM at 0.92
 
 gpu_memory_utilization = 0.85
 
@@ -24,8 +22,8 @@ tensor_parallel_size = 1
 
 [services.llm]
 engine = "vllm"
-# Use vLLM nightly/source build for Gemma4 assistant speculative decoding (MTP).
-runtime_bin_dir = ".venv-vllm-nightly/bin"
+# Use the stable vLLM env for this memory-serving profile.
+runtime_bin_dir = ".venv-vllm/bin"
 model = "${MODEL_ROOT}/hf-snapshots/gemma-4-e4b-it/current"
 port = 8002
 served_model_name = "gemma-4-e4b-memory"
@@ -44,10 +42,9 @@ PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
 # does not support multimodal models.
 language_model_only = true
 enable_prefix_caching = true
-# Nightly + assistant speculative uses more VRAM (second model). Reduce context
-# length to ensure KV cache can allocate.
+# Assistant speculative uses more VRAM (second model). Keep context below the
 
-max_model_len = 131072 
+max_model_len = 131072
 
 # Speculative decoding (Gemma assistant draft model).
 # vLLM expects SpeculativeConfig JSON.
@@ -76,7 +73,8 @@ override_generation_config = '{"temperature":0.2,"top_p":0.95,"top_k":20,"repeti
 # for stability; revisit after we confirm schema adherence is good enough.
 structured_outputs_config = '{"backend":"xgrammar","reasoning_parser":"gemma4","enable_in_reasoning":false,"disable_any_whitespace":false}'
 kv_cache_dtype = "fp8_e4m3"
-# Required for gemma-4-e4b-it-assistant draft model architecture.
+# Keep trust_remote_code off unless the stable env proves it is required for
+# this specific draft-model pairing.
 # trust_remote_code = true
 
 [services.llm.assets]

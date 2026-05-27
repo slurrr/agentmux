@@ -114,7 +114,7 @@ def test_bench_show_formats_latest_result(tmp_path: Path, monkeypatch, capsys) -
         },
         "observed_startup": {
             "available": True,
-            "vllm_version": "0.20.0",
+            "vllm_version": "0.21.0",
             "resolved_architecture": "Qwen3_5ForConditionalGeneration",
             "resolved_dtype": "torch.bfloat16",
             "resolved_kv_cache_dtype": "fp8_e4m3",
