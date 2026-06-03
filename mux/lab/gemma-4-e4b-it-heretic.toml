@@ -9,7 +9,7 @@ host = "0.0.0.0"
 
 [defaults.args]
 dtype = "bfloat16"
-gpu_memory_utilization = 0.93
+gpu_memory_utilization = 0.9
 max_num_seqs = 36
 tensor_parallel_size = 1
 enable_prefix_caching = true
