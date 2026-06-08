@@ -317,7 +317,7 @@ port = {server.server_port}
         rc = main(["--root", str(tmp_path / "mux"), "bench", "benchstack"])
         captured = capsys.readouterr()
         assert rc == 0
-        assert "benchmark: benchstack (ghosty-local-agent)" in captured.out
+        assert "BENCH REPORT: benchstack (ghosty-local-agent)" in captured.out
         result_dir = tmp_path / "runs" / "agentmux" / "benchmarks"
         files = list(result_dir.glob("*.json"))
         assert len(files) == 1

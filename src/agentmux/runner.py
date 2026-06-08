@@ -261,6 +261,55 @@ def _build_vllm_command(
     return command
 
 
+def _resolve_hf_model_path(model_str: str) -> str:
+    # If the path already exists locally, use it directly
+    expanded = Path(model_str).expanduser()
+    if expanded.exists():
+        return model_str
+
+    # Check if it looks like an HF repo pattern (author/repo or author/repo/file)
+    parts = model_str.strip("/").split("/")
+    if len(parts) in (2, 3):
+        author = parts[0]
+        repo = parts[1]
+        filename = parts[2] if len(parts) == 3 else None
+        
+        # Construct the standard HF hub cache directory path
+        hf_hub_root = Path.home() / "models" / "hf" / "hub"
+        if not hf_hub_root.is_dir():
+            # Fallback to standard HF home ~/.cache/huggingface/hub if models/hf/hub doesn't exist
+            hf_hub_root = Path.home() / ".cache" / "huggingface" / "hub"
+            
+        repo_dir = hf_hub_root / f"models--{author}--{repo}"
+        if repo_dir.is_dir():
+            snapshots_dir = repo_dir / "snapshots"
+            if snapshots_dir.is_dir():
+                # Find all snapshot subdirectories
+                snapshots = sorted(
+                    [p for p in snapshots_dir.iterdir() if p.is_dir()],
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True
+                )
+                if snapshots:
+                    # Search inside the latest snapshot
+                    snapshot_dir = snapshots[0]
+                    if filename:
+                        file_path = snapshot_dir / filename
+                        if file_path.is_file():
+                            return str(file_path)
+                    else:
+                        # Find any .gguf files
+                        ggufs = sorted(
+                            [p for p in snapshot_dir.glob("*.gguf") if p.is_file() and not p.name.startswith("mmproj")]
+                        )
+                        if len(ggufs) == 1:
+                            return str(ggufs[0])
+                        elif len(ggufs) > 1:
+                            return str(ggufs[0])
+    
+    return model_str
+
+
 def _build_llamacpp_command(service: ServiceSpec) -> list[str]:
     if service.model is None and service.hf_repo is None:
         raise ValueError(f"llamacpp service {service.name} is missing model or hf_repo")
@@ -280,7 +329,8 @@ def _build_llamacpp_command(service: ServiceSpec) -> list[str]:
         if service.hf_file is not None:
             command.extend(["--hf-file", service.hf_file])
     elif service.model is not None:
-        command.extend(["-m", service.model])
+        resolved_model = _resolve_hf_model_path(service.model)
+        command.extend(["-m", resolved_model])
     if service.served_model_name:
         command.extend(["--alias", service.served_model_name])
 

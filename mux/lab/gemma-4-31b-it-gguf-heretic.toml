@@ -1,5 +1,5 @@
 [stack]
-name = "gem-llama"
+name = "gem-heretic-31"
 track = "lab"
 primary_service = "llm"
 notes = "Minimal llama.cpp (llama-server) stack for Gemma 4 31B GGUF. Intended for GPU serving + OpenAI-compatible clients."
@@ -17,13 +17,13 @@ engine = "llamacpp"
 # runtime_bin_dir = "~/.local/bin"
 
 # GGUF model to serve.
-model = "/home/poop/models/local/hf-snapshots/gemma-4-31b-it-gguf/current/gemma-4-31B-it-UD-Q3_K_XL.gguf"
+model = "mradermacher/gemma-4-31B-it-The-DECKARD-HERETIC-UNCENSORED-Thinking-i1-GGUF"
 
 host = "127.0.0.1"
 port = 8002
 
 # Optional: informational label.
-served_model_name = "gemma-4-31b-Q3"
+served_model_name = "gemma-4-31b"
 
 # Minimal GPU-serving baseline (order-independent).
 # If this fails due to VRAM pressure, try:
@@ -32,9 +32,16 @@ served_model_name = "gemma-4-31b-Q3"
 # - lower parallel
 
 [services.llm.args]
-n_gpu_layers = "all"
+n_gpu_layers = 99
 threads = 8
-ctx_size = 8192
+ctx_size = 131072
+flash_attn = "on"
+cache_type_k = "q4_0"
+cache_type_v = "q4_0"
+fit = "off"
+# chat_template = "assets/chat_templates/gemma_4_model_author_template.jinja"
+chat_template_kwargs = '{"enable_thinking":false}'
+
 
 # Optional tweaks:
 # parallel = 2

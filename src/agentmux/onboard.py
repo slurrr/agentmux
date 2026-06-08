@@ -188,6 +188,7 @@ def _select_profile(source_text: str, slug: str, *, gguf: bool = False) -> dict[
             "enable_force_include_usage": True,
         },
         "assets": {},
+        "commented_args": {},
         "notes": "standard vLLM-onboarding defaults",
     }
 
@@ -231,13 +232,17 @@ def _select_profile(source_text: str, slug: str, *, gguf: bool = False) -> dict[
         profile["args"].update(
             {
                 "load_format": "gguf" if gguf else "auto",
-                "gpu_memory_utilization": 0.95,
-                "max_num_seqs": 20 if gguf else 36,
+                "gpu_memory_utilization": 0.9 if not gguf else 0.95,
+                "max_num_seqs": 8 if not gguf else 20,
+                "chat_template_content_format": "openai",
+            }
+        )
+        profile["commented_args"].update(
+            {
                 "enable_auto_tool_choice": True,
                 "tool_call_parser": "gemma4",
                 "reasoning_parser": "gemma4",
                 "exclude_tools_when_tool_choice_none": True,
-                "chat_template_content_format": "openai",
                 "generation_config": "auto",
                 "default_chat_template_kwargs": '{"enable_thinking":true}',
                 "structured_outputs_config": (
@@ -246,6 +251,7 @@ def _select_profile(source_text: str, slug: str, *, gguf: bool = False) -> dict[
                 ),
                 "async_scheduling": True,
                 "max_model_len": 131072,
+                "kv_cache_dtype": "fp8_e4m3",
             }
         )
         if gguf:
@@ -253,10 +259,10 @@ def _select_profile(source_text: str, slug: str, *, gguf: bool = False) -> dict[
                 "/home/poop/models/local/hf-snapshots/gemma-4-e4b-it/current"
             )
         profile["assets"]["chat_template"] = "assets/chat_templates/tool_chat_template_gemma4.jinja"
-        profile["notes"] = "gemma-style defaults with a tool chat template"
+        profile["notes"] = "gemma minimal first-run defaults with a tool chat template; advanced knobs are commented out until the base stack boots"
         if gguf:
             profile["args"]["dtype"] = "auto"
-            profile["notes"] = "gemma gguf defaults with a tool chat template"
+            profile["notes"] = "gemma gguf minimal defaults with a tool chat template; advanced knobs are commented out until the base stack boots"
         return profile
 
     return profile
@@ -286,6 +292,7 @@ def _render_manifest(
     stack_name: str,
     source_path: Path,
     source_label: str,
+    local_model_path: Path,
     active_model_path: Path,
     track: str,
     instructions: str | None,
@@ -312,6 +319,12 @@ def _render_manifest(
     lines.append(f"host = {_toml_value('0.0.0.0')}")
     lines.append("")
     _write_toml_table(lines, "defaults.args", profile["args"])
+    commented_args = profile.get("commented_args", {})
+    if commented_args:
+        lines.append("# Optional Gemma knobs kept commented out for first boot:")
+        for key, value in commented_args.items():
+            lines.append(f"# {key} = {_toml_value(value)}")
+        lines.append("")
 
     lines.append("[services.main]")
     lines.append(f"engine = {_toml_value('vllm')}")
@@ -319,7 +332,7 @@ def _render_manifest(
         "scripts/gemma4-vllm-bin" if gguf and "gemma" in stack_name.lower() else ".venv-vllm/bin"
     )
     lines.append(f"runtime_bin_dir = {_toml_value(runtime_bin_dir)}")
-    lines.append(f"model = {_toml_value(str(active_model_path))}")
+    lines.append(f"model = {_toml_value(str(local_model_path))}")
     lines.append(f"port = {_toml_value(DEFAULT_STACK_PORT)}")
     lines.append(f"served_model_name = {_toml_value(stack_name)}")
     lines.append(f"extra_args = {_toml_value(['--disable-uvicorn-access-log'])}")
@@ -404,6 +417,7 @@ def onboard_model(
         stack_name=slug,
         source_path=resolved_source,
         source_label=slug_source,
+        local_model_path=local_model_path,
         active_model_path=active_model_path,
         track=track,
         instructions=instructions,

@@ -10,7 +10,8 @@ def test_render_outputs_stack_commands(capsys) -> None:
     rc = main(["render", "example_vllm_recipes"])
     captured = capsys.readouterr()
     assert rc == 0
-    assert "[generalist] uv run vllm serve" in captured.out
+    assert "[generalist]\n  uv run vllm serve" in captured.out
+    assert "    --chat-template assets/chat_templates/qwen25_default.jinja" in captured.out
 
 
 def test_show_json_outputs_generic_args(capsys) -> None:
@@ -252,12 +253,12 @@ def test_bench_show_formats_latest_result(tmp_path: Path, monkeypatch, capsys) -
     rc = main(["bench-show"])
     captured = capsys.readouterr()
     assert rc == 0
-    assert "benchmark: benchstack (ghosty-local-agent)" in captured.out
-    assert "perf (endpoint)" in captured.out
-    assert "deterministic prompt bench" in captured.out
-    assert "kv cache dtype: fp8_e4m3" in captured.out
-    assert "failures" in captured.out
-    assert "judge-flagged" in captured.out
+    assert "BENCH REPORT: benchstack (ghosty-local-agent)" in captured.out
+    assert "PERF (ENDPOINT)" in captured.out
+    assert "PROMPT BENCH" in captured.out
+    assert "KV Cache DType: fp8_e4m3" in captured.out
+    assert "FAILURES" in captured.out
+    assert "JUDGE-FLAGGED" in captured.out
 
 
 def test_bench_show_json_outputs_selected_result(tmp_path: Path, monkeypatch, capsys) -> None:

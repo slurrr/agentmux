@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -263,6 +264,25 @@ def _print_show(stack_name: str, root: Path, as_json: bool) -> int:
     return 0
 
 
+def _format_render_command(command: list[str]) -> str:
+    if not command:
+        return ""
+    head_end = 1
+    while head_end < len(command) and not command[head_end].startswith("-"):
+        head_end += 1
+    lines = [f"  {shlex.join(command[:head_end])}"]
+    index = head_end
+    while index < len(command):
+        token = command[index]
+        if token.startswith("-") and index + 1 < len(command) and not command[index + 1].startswith("-"):
+            lines.append(f"    {token} {shlex.quote(command[index + 1])}")
+            index += 2
+        else:
+            lines.append(f"    {shlex.quote(token)}")
+            index += 1
+    return "\n".join(lines)
+
+
 def _print_render(stack_name: str, root: Path, as_json: bool) -> int:
     plan = build_stack_plan(stack_name, root=root)
     payload = {
@@ -288,9 +308,12 @@ def _print_render(stack_name: str, root: Path, as_json: bool) -> int:
     if as_json:
         print(json.dumps(payload, indent=2))
     else:
-        for service in plan.services:
-            prefix = "(reuse) " if not service.managed else ""
-            print(f"[{service.service}] {prefix}{service.shell_command()}")
+        for index, service in enumerate(plan.services):
+            if index:
+                print()
+            prefix = " (reuse)" if not service.managed else ""
+            print(f"[{service.service}]{prefix}")
+            print(_format_render_command(service.command))
     return 0
 
 

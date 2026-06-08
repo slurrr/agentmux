@@ -1,33 +1,23 @@
 # Current Goal
-Keep onboarding aligned with the repo’s mux shapes and get a Gemma stack running cleanly.
+Make onboarding produce a minimal, runnable Gemma stack without changing the runtime environment.
 
 # Current State
-- Onboarding still has the family-aware presets and GGUF file symlink handling in `src/agentmux/onboard.py`.
-- The live Gemma stack was switched off the unsupported GGUF artifact and is now using the supported HF snapshot at `/home/poop/models/local/hf-snapshots/gemma-4-e4b-it/current`.
-- `mux/lab/gemma-4-31b-it-gguf.toml` currently runs as a Gemma4-E4B memory stack with:
-  - `runtime_bin_dir = ".venv-vllm/bin"`
-  - `served_model_name = "gemma-4-e4b-memory"`
-  - `max_model_len = 65536`
-  - `dtype = "bfloat16"`
-  - memory service enabled
-- `agentmux up gem-mem` now starts successfully and both services are up:
-  - LLM on `http://127.0.0.1:8002/v1`
-  - Hindsight memory on `http://127.0.0.1:8888/v1`
-- The GGUF Gemma 4 path was tested and ruled out: vLLM failed in the GGUF loader with `Unknown gguf model_type: gemma4` and then tensor-map mismatches.
-- Validation still passes for the onboarding tests.
+- `src/agentmux/onboard.py` now writes Gemma manifests with a minimal first-boot arg set and comments out risky Gemma-specific knobs.
+- Onboarded Gemma manifests now point at the stable local snapshot path (`~/models/local/hf-snapshots/.../current`) instead of the active symlink.
+- `mux/lab/gemma-12b-block.toml` was updated to the minimal first-run shape and now uses the local model path.
+- `tests/test_onboard.py` was updated for the new path choice and commented Gemma knobs.
+- Focused tests pass: `tests/test_main.py::test_render_outputs_stack_commands`, `tests/test_onboard.py`, `tests/test_runner.py`.
+- No runtime environment changes were made.
 
 # Decisions
-- For HF snapshots, keep the stable `current` directory pointer pattern.
-- GGUF artifacts can be onboarded as file symlinks, but Gemma 4 GGUF is not a viable serving target in this vLLM stack.
-- The working Gemma stack should use the supported HF snapshot instead of forcing the unsupported GGUF artifact.
-- Match the mux presets the user hand-tuned instead of keeping the old generic onboarding defaults.
-- Use the existing chat template assets already in the repo instead of inventing new template files.
+- Keep the model path in manifests on the stable local pointer, not the active symlink.
+- For Gemma onboarding, keep the base stack minimal and comment out advanced tool/structured-output knobs until the stack boots.
+- Do not change the vLLM/transformers environment yet.
 
 # Open Problems
-- Decide whether onboarding should reject Gemma 4 GGUF up front or keep a best-effort experimental path.
-- The broader bench-show expectation mismatch in `tests/test_main.py` still exists but is unrelated.
+- `gemma-12b-block` is still based on a `gemma4_unified` artifact, which may remain unsupported in the current vLLM/transformers env.
+- The unrelated `bench-show` test failure still exists.
 
 # Resume Instructions
-1. If the user wants to keep iterating on Gemma, decide whether to formalize the HF-backed `gem-mem` stack as the default path.
-2. If we keep the GGUF experiment around, teach onboarding to fail fast or mark Gemma 4 GGUF as unsupported instead of generating a misleading launch config.
-3. If needed, inspect `~/runs/agentmux/logs/20260512-224546-gem-mem-llm.log` for the successful HF launch details.
+1. If the next step is runtime work, decide whether to stop at the repo-level manifest cleanup or revisit environment support for `gemma4_unified`.
+2. If the next step is validation, run `uv run pytest tests/test_main.py::test_render_outputs_stack_commands tests/test_onboard.py tests/test_runner.py -q`.

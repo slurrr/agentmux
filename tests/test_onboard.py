@@ -59,7 +59,7 @@ def test_onboard_model_creates_links_and_mux_manifest(tmp_path: Path, monkeypatc
 
     stack = resolve_stack(result.stack_name, root=mux_root)
     assert stack.track == "lab"
-    assert stack.services["main"].model == str(active_link)
+    assert stack.services["main"].model == str(local_link)
     assert stack.services["main"].assets.values["chat_template"] == (
         "assets/chat_templates/qwen3.5_hf_fix_chat_template.jinja"
     )
@@ -67,6 +67,45 @@ def test_onboard_model_creates_links_and_mux_manifest(tmp_path: Path, monkeypatc
     assert "memory" in stack.services
     assert stack.services["memory"].llm_service == "main"
     assert "include memory" in manifest.read_text(encoding="utf-8")
+
+
+def test_onboard_model_uses_minimal_gemma_defaults(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "models" / "hf" / "hub" / "models--google--Gemma-4-12B-it"
+    snapshot = source / "snapshots" / "1111111111111111111111111111111111111111"
+    snapshot.mkdir(parents=True)
+    (source / "refs").mkdir(parents=True, exist_ok=True)
+    (source / "refs" / "main").write_text("1111111111111111111111111111111111111111\n", encoding="utf-8")
+    (snapshot / "config.json").write_text("{}\n", encoding="utf-8")
+
+    roots = OnboardRoots(
+        model_root=tmp_path / "models",
+        local_model_root=tmp_path / "models" / "local" / "hf-snapshots",
+        active_model_root=tmp_path / "models" / "active",
+        model_manifest_root=tmp_path / "models" / "manifests",
+        onboarding_root=tmp_path / "runs" / "agentmux" / "onboarding",
+    )
+    mux_root = tmp_path / "mux"
+    (mux_root / "lab").mkdir(parents=True)
+
+    result = onboard_model(
+        source,
+        launch=False,
+        smoke=False,
+        bench=False,
+        roots=roots,
+        mux_root=mux_root,
+    )
+
+    manifest = Path(result.manifest_path)
+    stack = resolve_stack(result.stack_name, root=mux_root)
+    assert stack.services["main"].model == result.local_model_path
+    assert stack.services["main"].args["load_format"] == "auto"
+    assert stack.services["main"].args["max_num_seqs"] == 8
+    assert "enable_auto_tool_choice" not in stack.services["main"].args
+    assert "# Optional Gemma knobs kept commented out for first boot:" in manifest.read_text(encoding="utf-8")
+    assert "# enable_auto_tool_choice = true" in manifest.read_text(encoding="utf-8")
+    assert "# structured_outputs_config =" in manifest.read_text(encoding="utf-8")
 
 
 def test_onboard_model_handles_gguf_models(tmp_path: Path, monkeypatch) -> None:
@@ -108,7 +147,7 @@ def test_onboard_model_handles_gguf_models(tmp_path: Path, monkeypatch) -> None:
     assert Path(result.active_model_path).is_symlink()
     assert Path(result.active_model_path).resolve().suffix == ".gguf"
     stack = resolve_stack(result.stack_name, root=mux_root)
-    assert stack.services["main"].model == result.active_model_path
+    assert stack.services["main"].model == result.local_model_path
     assert stack.services["main"].args["load_format"] == "gguf"
     assert stack.services["main"].args["dtype"] == "auto"
     assert stack.services["main"].args["tokenizer"] == (
