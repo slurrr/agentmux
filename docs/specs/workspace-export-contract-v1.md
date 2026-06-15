@@ -6,13 +6,21 @@ Backend workspaces are the workshop. AgentMux is the launch cockpit.
 
 A workspace export is the handoff artifact between those two worlds. It tells AgentMux how to run a proven backend serving appliance without making AgentMux understand backend internals such as TabbyAPI config paths, llama.cpp flags, templates, sampler overrides, or LoRA layout.
 
+The normal handoff is intentionally simple:
+
+- the workspace proves the service shape
+- the workspace exports that same serving shape for the AgentMux port
+- AgentMux launches it with the right container name and runtime directory
+
+AgentMux does **not** hide a port mismatch with `host_port:container_port` remapping in the normal path.
+
 ## Lifecycle
 
 1. A backend workspace builds/rebuilds backend images.
 2. The workspace proves a model/preset using its own CLI and lab containers.
-3. The workspace exports an AgentMux service bundle.
+3. The workspace exports an AgentMux service bundle for the intended serving port.
 4. AgentMux references that bundle from a mux manifest.
-5. AgentMux chooses mux identity, final container name, host port, and runtime directory.
+5. AgentMux chooses mux identity, final container name, and runtime directory.
 6. The mux starts in `mux/lab` for agentic workflow proving, then can graduate to `mux/core`.
 
 ## Export directory
@@ -49,14 +57,14 @@ AgentMux owns:
 - mux name
 - service name
 - final container name
-- host-facing port
+- the service port it will publish as `port:port`
 - optional mux-local extra mounts/args
 - managed runtime directory under `~/runs/agentmux`
 
 The workspace export owns:
 
 - image tag
-- container-internal serving port
+- proven serving port
 - backend command
 - backend-required bind mounts
 - backend-required env vars
@@ -75,7 +83,7 @@ notes = "Human notes are allowed. AgentMux does not interpret them."
 
 [service]
 image = "localhost/llm-tabby:latest"
-container_port = 5000
+port = 8002
 health_path = "/v1/models"
 runtime_target = "/app/data"
 podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
@@ -107,7 +115,9 @@ mode = "ro"
 ### `[service]`
 
 - `image`: already-built image tag AgentMux should run.
-- `container_port`: port the backend listens on inside the container.
+- `port`: port the backend is configured to listen on in the exported serving shape.
+
+The mux manifest may repeat the same `port` for readability. If both the export and mux manifest set `port`, they must match. If they do not match, AgentMux fails and tells the operator to regenerate the workspace export for the AgentMux port.
 
 ## Strongly recommended fields
 
@@ -120,17 +130,25 @@ mode = "ro"
 
 ## Port contract
 
-The workspace should export the container's internal serving port as `container_port`.
+The workspace export is expected to represent the proven serve shape on the intended AgentMux port.
 
-AgentMux maps the mux manifest's host-facing `port` to that internal port:
+AgentMux publishes the service as:
 
 ```bash
---publish <agentmux-port>:<container-port>
+--publish <port>:<port>
 ```
 
-This lets the same proven backend appliance run on different agent-stack ports without regenerating backend configs, as long as the backend listens on a stable container-internal port.
+Example:
 
-If a backend requires the configured serving port to match the host port, the workspace may export `container_port` equal to the intended port, but that is less reusable.
+```bash
+--publish 8002:8002
+```
+
+This preserves the principle: AgentMux is launching the already-proven service shape on the right port. It is not using Docker/Podman port remapping to disguise a backend still configured for some other port.
+
+If a different port is needed, regenerate the workspace export for that port.
+
+Raw `ports` remain available as an escape hatch for unusual container networking, but they are not the normal workspace promotion path.
 
 ## Runtime directory contract
 
@@ -138,6 +156,12 @@ If `runtime_target` is set, AgentMux automatically appends a writable mount:
 
 ```text
 ~/runs/agentmux/<mux>/<service> -> <runtime_target>
+```
+
+Example for a mux named `gemma-4-12b-it-exl3` and service `main`:
+
+```text
+~/runs/agentmux/gemma-4-12b-it-exl3/main -> /app/data
 ```
 
 A mux manifest may override the source with:
@@ -166,8 +190,8 @@ Rules:
 - `volumes`: lists append in order.
 - `command`: service block overrides export command.
 - `health_path`: service block overrides export health path.
-- `container_port`: service block overrides export container port.
-- `ports`: if explicitly set in the AgentMux manifest, AgentMux uses those raw mappings instead of generating `<port>:<container_port>`.
+- `port`: export and service values must match when both are set.
+- `ports`: if explicitly set in the AgentMux manifest, AgentMux uses those raw mappings instead of generating `port:port`.
 
 ## Escape hatches
 

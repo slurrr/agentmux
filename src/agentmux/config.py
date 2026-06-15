@@ -41,7 +41,6 @@ class ServiceSpec:
     container_name: str
     host: str
     port: int
-    container_port: int
     podman_args: list[str]
     env: dict[str, str]
     labels: dict[str, str]
@@ -252,7 +251,6 @@ def _parse_service(
         "container_name",
         "host",
         "port",
-        "container_port",
         "podman_args",
         "env",
         "labels",
@@ -281,16 +279,18 @@ def _parse_service(
     container_name = _as_str(
         raw.get("container_name"), f"services.{name}.container_name", required=True
     )
-    port = _as_int(raw.get("port"), f"services.{name}.port", required=True)
-    container_port = _as_int(
-        _first_value(raw.get("container_port"), export_raw.get("container_port"), port),
-        f"services.{name}.container_port",
-        required=True,
-    )
+    export_port = _as_int(export_raw.get("port"), f"services.{name}.workspace_export.port")
+    service_port = _as_int(raw.get("port"), f"services.{name}.port")
+    if export_port is not None and service_port is not None and export_port != service_port:
+        raise ValueError(
+            f"services.{name}.port ({service_port}) does not match workspace export "
+            f"port ({export_port}); regenerate the workspace export for the AgentMux port"
+        )
+    port = service_port if service_port is not None else export_port
+    if port is None:
+        raise ValueError(f"services.{name}.port is required")
     assert image is not None
     assert container_name is not None
-    assert port is not None
-    assert container_port is not None
 
     default_env = _as_str_dict(defaults.get("env"), "defaults.env")
     export_env = _as_str_dict(export_raw.get("env"), f"services.{name}.workspace_export.env")
@@ -325,7 +325,7 @@ def _parse_service(
         raw.get("ports"), f"services.{name}.ports"
     )
     if not ports:
-        ports = [f"{port}:{container_port}"]
+        ports = [f"{port}:{port}"]
 
     return ServiceSpec(
         name=name,
@@ -334,7 +334,6 @@ def _parse_service(
         host=_as_str(raw.get("host", defaults.get("host", "127.0.0.1")), f"services.{name}.host")
         or "127.0.0.1",
         port=port,
-        container_port=container_port,
         podman_args=_as_str_list(defaults.get("podman_args"), "defaults.podman_args")
         + _as_str_list(
             export_raw.get("podman_args"),

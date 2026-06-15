@@ -54,7 +54,7 @@ container_name = "agentmux-gemma-4-12b-it-exl3-main"
 port = 8002
 ```
 
-The workspace export tells AgentMux the image, internal container port, backend command, backend-required volumes, env vars, and health path. AgentMux chooses the final host-facing port, container identity, and runtime directory.
+The workspace export tells AgentMux the image, proven serving port, backend command, backend-required volumes, env vars, and health path. AgentMux chooses the final container identity and runtime directory. AgentMux publishes the service as `port:port`; it does not normally remap `8002:5000` or similar.
 
 ## Manifest fields
 
@@ -62,12 +62,11 @@ Required service fields for normal exported services:
 
 - `workspace_export`: directory containing `agentmux-service.toml`, or a direct path to that file
 - `container_name`: exact managed container name
-- `port`: host-facing service port
+- `port`: service port; must match the workspace export port when both are set
 
 Low-level service fields remain available as escape hatches:
 
 - `image`
-- `container_port`
 - `podman_args`
 - `env`
 - `labels`
@@ -95,9 +94,10 @@ Rules:
 - `defaults.volumes` + export `volumes` + service `volumes` are appended in order.
 - `defaults.env` < export `env` < service `env`.
 - `defaults.labels` < export `labels` < service `labels`.
-- service `command`, `health_path`, and `container_port` override export values.
-- if no raw `ports` are declared, AgentMux generates `<port>:<container_port>`.
-- if raw `ports` are declared, AgentMux uses them as-is.
+- service `command` and `health_path` override export values.
+- export `port` and service `port` must match when both are set.
+- if no raw `ports` are declared, AgentMux generates `<port>:<port>`.
+- if raw `ports` are declared, AgentMux uses them as-is as an escape hatch.
 
 No backend semantics are inferred from image names or mux names.
 

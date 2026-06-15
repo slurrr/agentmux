@@ -8,8 +8,7 @@ workspace_export = "./exports/example-gguf"
 container_name = "agentmux-example-gguf-main"
 port = 8002
 
-# Optional override examples:
-# container_port = 5000              # only needed if overriding the export
+# Optional addition examples:
 # podman_args = ["--cpus", "8"]      # appended after export podman_args
 # [[services.main.volumes]]          # appended after export volumes
 # source = "~/runs/some-extra-input"

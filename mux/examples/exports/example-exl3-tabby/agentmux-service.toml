@@ -6,7 +6,7 @@ notes = "Example of what workspace-exl3 should export after a preset is promoted
 
 [service]
 image = "localhost/llm-tabby:latest"
-container_port = 5000
+port = 8002
 health_path = "/v1/models"
 runtime_target = "/app/data"
 podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]

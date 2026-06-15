@@ -46,9 +46,9 @@ container_name = "agentmux-gemma-4-12b-it-exl3-main"
 port = 8002
 ```
 
-The workspace export owns the backend appliance details: image, internal container port, backend command, backend-required mounts, env vars, GPU/security args, and health path.
+The workspace export owns the backend appliance details: image, proven serving port, backend command, backend-required mounts, env vars, GPU/security args, and health path.
 
-AgentMux owns the final mux identity: mux name, service name, managed container name, host-facing port, and runtime directory.
+AgentMux owns the final mux identity: mux name, service name, managed container name, and runtime directory. It publishes the service as `port:port`, so a mux on `8002` renders `--publish 8002:8002`, not `8002:5000`.
 
 ## Low-level escape hatch
 
