@@ -1,37 +1,27 @@
-# AgentMux Workspace Export Contract v1
+# Workspace Export To AgentMux Contract v1
 
 ## Purpose
 
-Backend workspaces are the workshop. AgentMux is the launch cockpit.
+This contract tells backend workspaces what to deliver when a proven backend/model should become an
+AgentMux mux.
 
-A workspace export is the handoff artifact between those two worlds. It tells AgentMux how to run a proven backend serving appliance without making AgentMux understand backend internals such as TabbyAPI config paths, llama.cpp flags, templates, sampler overrides, or LoRA layout.
+Exports are not meant to live forever in AgentMux. They are input material for creating an AgentMux
+mux directory.
 
-## Lifecycle
+## Deliverable
 
-1. A backend workspace builds/rebuilds backend images.
-2. The workspace proves a model/preset using its own CLI and lab containers.
-3. The workspace exports an AgentMux service bundle.
-4. AgentMux references that bundle from a mux manifest.
-5. AgentMux chooses mux identity, final container name, host port, and runtime directory.
-6. The mux starts in `mux/lab` for agentic workflow proving, then can graduate to `mux/core`.
-
-## Export directory
-
-A workspace SHOULD export a directory shaped like this:
+A workspace should export enough information to create:
 
 ```text
-exports/agentmux/<slug>/
-  agentmux-service.toml
-  ...backend-owned files needed by the export...
+mux/<track>/<mux-name>/
+  mux.toml
+  manifest.md
 ```
 
-The only required filename is `agentmux-service.toml`.
+The preferred export can be exactly those two files. If the workspace writes an intermediate export
+format, AgentMux should import/convert it and then discard or archive the intermediate artifact.
 
-Relative paths inside `agentmux-service.toml` are resolved relative to that file. This lets a workspace export a self-contained deployment bundle when that is useful.
-
-## AgentMux manifest reference
-
-Normal AgentMux manifests should be small:
+## `mux.toml` target shape
 
 ```toml
 [mux]
@@ -39,156 +29,93 @@ name = "gemma-4-12b-it-exl3"
 primary_service = "main"
 
 [services.main]
-workspace_export = "~/code/dev/workspace-exl3/exports/agentmux/gemma-4-12b-it-exl3"
+image = "localhost/agentmux-gemma-4-12b-it-exl3:stable"
 container_name = "agentmux-gemma-4-12b-it-exl3-main"
 port = 8002
-```
-
-AgentMux owns:
-
-- mux name
-- service name
-- final container name
-- host-facing port
-- optional mux-local extra mounts/args
-- managed runtime directory under `~/runs/agentmux`
-
-The workspace export owns:
-
-- image tag
-- container-internal serving port
-- backend command
-- backend-required bind mounts
-- backend-required env vars
-- default Podman GPU/security args
-- health path
-- runtime mount target inside the container
-
-## Export TOML shape
-
-```toml
-[agentmux_export]
-version = 1
-name = "gemma-4-12b-it-exl3"
-backend = "exl3-tabby"
-notes = "Human notes are allowed. AgentMux does not interpret them."
-
-[service]
-image = "localhost/llm-tabby:latest"
 container_port = 5000
-health_path = "/v1/models"
-runtime_target = "/app/data"
 podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
-command = []
-
-[service.env]
-HF_HOME = "/models/hf"
-
-[service.labels]
-backend = "exl3-tabby"
-
-[[service.volumes]]
-source = "~/models"
-target = "/models"
-mode = "ro"
-
-[[service.volumes]]
-source = "./tabby-config.yml"
-target = "/app/tabbyAPI/config.yml"
-mode = "ro"
+health_path = "/v1/models"
 ```
 
-## Required fields
+Required service fields:
 
-### `[agentmux_export]`
+- `image`: proven prebuilt image to run
+- `container_name`: stable managed container name
+- `port`: host-facing port
 
-- `version`: must be `1`.
+Recommended service fields:
 
-### `[service]`
+- `container_port`: port the service listens on inside the container; defaults to `port`
+- `podman_args`: GPU/security args needed by this image
+- `health_path`: readiness path; defaults to `/v1/models`
+- `command`: only if the image default `CMD` is not enough
+- `env`, `labels`, `volumes`: only when truly launch-relevant
 
-- `image`: already-built image tag AgentMux should run.
-- `container_port`: port the backend listens on inside the container.
+## Standard AgentMux runtime mount
 
-## Strongly recommended fields
-
-- `health_path`: readiness path, usually `/v1/models`.
-- `runtime_target`: path inside the container where AgentMux should mount a writable runtime directory.
-- `podman_args`: backend-required Podman args such as GPU/security flags.
-- `volumes`: backend-required bind mounts.
-- `env`: backend-required environment variables.
-- `command`: command after the image name, if the image default command is not sufficient.
-
-## Port contract
-
-The workspace should export the container's internal serving port as `container_port`.
-
-AgentMux maps the mux manifest's host-facing `port` to that internal port:
-
-```bash
---publish <agentmux-port>:<container-port>
-```
-
-This lets the same proven backend appliance run on different agent-stack ports without regenerating backend configs, as long as the backend listens on a stable container-internal port.
-
-If a backend requires the configured serving port to match the host port, the workspace may export `container_port` equal to the intended port, but that is less reusable.
-
-## Runtime directory contract
-
-If `runtime_target` is set, AgentMux automatically appends a writable mount:
+AgentMux always appends:
 
 ```text
-~/runs/agentmux/<mux>/<service> -> <runtime_target>
+~/runs/agentmux/<mux>/<service>:/runs:rw
 ```
 
-A mux manifest may override the source with:
+Workspaces should make promoted images use `/runs` for writable runtime/log/data state. If the
+backend wants another path, handle that inside the image.
 
-```toml
-[services.main]
-runtime_dir = "~/runs/agentmux/custom-main"
+## No automatic model mount
+
+AgentMux does not automatically mount `~/models`.
+
+If a promoted image needs host model files, the workspace export/import should make that explicit in
+`mux.toml`, or the image should already contain/use whatever model access pattern was proven.
+
+## `manifest.md` target shape
+
+`manifest.md` is the real human manifest. It should include enough context to understand the mux long
+after the workspace details are forgotten.
+
+Recommended sections:
+
+```markdown
+# <mux-name>
+
+## Status
+- Track:
+- State:
+- Intended role:
+
+## Launch identity
+- Mux:
+- Service:
+- Container:
+- Host port:
+- Container port:
+- Runtime:
+
+## Source
+- Workspace:
+- Backend:
+- Image:
+- Source model/artifact:
+
+## Serving configuration
+- Full backend config relevant to serving
+- Launch flags / server args
+- Sampling defaults
+- Templates / prompt format
+- LoRA / tokenizer notes if relevant
+
+## Proving notes
+- What was tested
+- Known caveats
+- Promotion history
 ```
 
-Workspaces should not hard-code AgentMux runtime source paths. They should only tell AgentMux where runtime state belongs inside the container.
+## Boundary
 
-## Merge and override rules
+The workspace owns proving and backend-specific truth.
 
-Order is:
+AgentMux owns stable serving and the durable library entry.
 
-1. AgentMux manifest `[defaults]`
-2. workspace export
-3. AgentMux service block
-4. AgentMux automatic runtime mount
-
-Rules:
-
-- `env`: later keys override earlier keys.
-- `labels`: later keys override earlier keys.
-- `podman_args`: lists append in order.
-- `volumes`: lists append in order.
-- `command`: service block overrides export command.
-- `health_path`: service block overrides export health path.
-- `container_port`: service block overrides export container port.
-- `ports`: if explicitly set in the AgentMux manifest, AgentMux uses those raw mappings instead of generating `<port>:<container_port>`.
-
-## Escape hatches
-
-AgentMux still supports low-level service fields:
-
-- `podman_args`
-- `env`
-- `labels`
-- `volumes`
-- `command`
-- `ports`
-
-These are for mux-local additions or unusual launches. They should not be the normal place for backend workspace details.
-
-## Non-goals
-
-The export must not require AgentMux to:
-
-- build images
-- generate backend configs
-- inspect model caches
-- understand backend-specific flags
-- run benchmark/eval/proving workflows
-- mutate workspace state during `agentmux up`
+The export/import should preserve important metadata in `manifest.md`, but AgentMux should not turn
+backend-specific serving config into Python schema.

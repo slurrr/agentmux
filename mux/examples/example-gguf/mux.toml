@@ -1,0 +1,12 @@
+[mux]
+name = "example-gguf"
+primary_service = "main"
+notes = "Example launch mux for a GGUF/llama.cpp AgentMux-ready image."
+
+[services.main]
+image = "localhost/agentmux-example-gguf:stable"
+container_name = "agentmux-example-gguf-main"
+port = 8002
+container_port = 5000
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+health_path = "/v1/models"

@@ -2,20 +2,23 @@
 
 ## Intent
 
-AgentMux v2 is a clean launch cockpit for containerized local agent-serving stacks.
+AgentMux is the stable serving cockpit and library for proven local agent stacks.
 
-Backend workspaces own backend construction, model proving, backend config generation, and export bundles. AgentMux owns the serving contract and lifecycle for promoted stacks.
+Backend workspaces are proving grounds. They can be messy. They build images, tune backend config,
+prove models, and generate exports. AgentMux keeps the stable result: a tiny launch recipe plus a
+human-readable manifest for what the mux actually represents.
 
 ## Boundary
 
 AgentMux owns:
 
-- mux manifests
-- workspace export contract
+- stable mux names
+- `mux/lab` and `mux/core` library organization
+- tiny launch recipes (`mux.toml`)
+- human manifests (`manifest.md`)
 - exact `podman run` command rendering
 - `up`, `down`, `status`, and `logs`
 - active runtime state under `~/runs/agentmux`
-- lab-to-core promotion of proven agent-serving stacks
 
 AgentMux does not own:
 
@@ -23,25 +26,29 @@ AgentMux does not own:
 - backend virtualenvs
 - CUDA/Python dependency management
 - quantization
-- model quality/performance benchmarking
 - backend-specific config generation
 - Hugging Face cache discovery
-- backend workspace mutation during launch
+- model proving/benchmarking loops
+- backend workspace runtime layout
 
-## Normal workflow
+## Normal mux directory
 
-1. Prove a backend/model/preset in a backend workspace such as `workspace-exl3` or `workspace-gguf`.
-2. Export an AgentMux service bundle from that workspace.
-3. Reference the export from `mux/lab/<mux>.toml`.
-4. Use `agentmux render <mux>` to inspect the exact launch command.
-5. Use `agentmux up <mux>` to try the stack in real agentic workflows.
-6. Promote the mux from `lab` to `core` when it becomes a known-good tool.
+A mux is a directory:
 
-## Workspace export contract
+```text
+mux/lab/gemma-4-12b-it-exl3/
+  mux.toml
+  manifest.md
+```
 
-See `docs/specs/workspace-export-contract-v1.md`.
+`mux.toml` is intentionally tiny and operational. It is only what AgentMux needs to render and launch
+the stable container.
 
-Normal AgentMux manifests should usually reference a workspace export instead of spelling out backend-specific mounts:
+`manifest.md` is the human manifest. It should contain everything needed to remember what this mux is
+after six months: source workspace, model, backend, image tag, full serving config, launch-relevant
+backend flags, caveats, proving notes, and promotion history.
+
+## Launch recipe
 
 ```toml
 [mux]
@@ -49,77 +56,66 @@ name = "gemma-4-12b-it-exl3"
 primary_service = "main"
 
 [services.main]
-workspace_export = "~/code/dev/workspace-exl3/exports/agentmux/gemma-4-12b-it-exl3"
+image = "localhost/agentmux-gemma-4-12b-it-exl3:stable"
 container_name = "agentmux-gemma-4-12b-it-exl3-main"
 port = 8002
+container_port = 5000
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+health_path = "/v1/models"
 ```
 
-The workspace export tells AgentMux the image, internal container port, backend command, backend-required volumes, env vars, and health path. AgentMux chooses the final host-facing port, container identity, and runtime directory.
+AgentMux renders:
 
-## Manifest fields
+```text
+--publish 8002:5000
+--volume ~/runs/agentmux/gemma-4-12b-it-exl3/main:/runs:rw
+```
 
-Required service fields for normal exported services:
+AgentMux does not add a models mount automatically. If a promoted image still needs extra mounts,
+those mounts must be explicit in `mux.toml` or already handled by the exported launch recipe before
+it is imported into AgentMux.
 
-- `workspace_export`: directory containing `agentmux-service.toml`, or a direct path to that file
-- `container_name`: exact managed container name
-- `port`: host-facing service port
+## Import/export model
 
-Low-level service fields remain available as escape hatches:
+Workspace exports are handoff artifacts, not permanent AgentMux library objects.
 
-- `image`
-- `container_port`
-- `podman_args`
-- `env`
-- `labels`
-- `ports`
-- `volumes`
-- `command`
-- `health_path`
-- `runtime_target`
-- `runtime_dir`
+The desired flow is:
 
-A service may omit `workspace_export` and use only low-level fields, but that is not the preferred workflow for backend workspace promotion.
+1. workspace proves the backend/model/container
+2. workspace exports enough data to create an AgentMux mux directory
+3. AgentMux import converts that export into:
+   - `mux.toml`
+   - `manifest.md`
+4. the temporary export can be deleted or archived outside the active mux library
 
-## Precedence
+Until import automation exists, create the pair manually.
 
-Order is:
+## Runtime convention
 
-1. AgentMux manifest `[defaults]`
-2. workspace export
-3. AgentMux service block
-4. AgentMux automatic runtime mount
+AgentMux always mounts a writable runtime directory at `/runs`:
 
-Rules:
+```text
+~/runs/agentmux/<mux>/<service> -> /runs
+```
 
-- `defaults.podman_args` + export `podman_args` + service `podman_args` are appended in order.
-- `defaults.volumes` + export `volumes` + service `volumes` are appended in order.
-- `defaults.env` < export `env` < service `env`.
-- `defaults.labels` < export `labels` < service `labels`.
-- service `command`, `health_path`, and `container_port` override export values.
-- if no raw `ports` are declared, AgentMux generates `<port>:<container_port>`.
-- if raw `ports` are declared, AgentMux uses them as-is.
+Promoted images should use `/runs` for logs, db files, generated runtime state, and any other
+container-writable serving data. If a backend naturally wants another path, the image should adapt
+internally.
 
-No backend semantics are inferred from image names or mux names.
+## Workflow
 
-## Runtime model
-
-Runtime state is container-centric:
-
-- container name
-- container id
-- image
-- host/port
-- health URL
-- launch command
-- started timestamp
-
-PID tracking is not part of AgentMux v2.
+1. Prove in backend workspace.
+2. Export/import into `mux/lab/<mux>/`.
+3. Run `agentmux render <mux>` and inspect the launch command.
+4. Run `agentmux up <mux>` and test in real agentic workflows.
+5. Add notes to `manifest.md`.
+6. Promote directory from `mux/lab` to `mux/core` when stable.
 
 ## Acceptance criteria
 
 - `agentmux render <mux>` shows the exact `podman run` command that `up` will execute.
-- `agentmux up <mux>` launches managed containers from already-built images and workspace exports.
+- `agentmux up <mux>` launches managed containers from already-built images.
 - `agentmux down` removes active managed containers.
 - `agentmux status` reports container running state through Podman.
 - `agentmux logs <service>` delegates to `podman logs`.
-- The project has no backend runtime dependencies.
+- AgentMux has no backend runtime dependencies.

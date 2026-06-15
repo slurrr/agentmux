@@ -1,0 +1,12 @@
+[mux]
+name = "example-exl3-tabby"
+primary_service = "main"
+notes = "Example launch mux for an ExLlamaV3/TabbyAPI AgentMux-ready image."
+
+[services.main]
+image = "localhost/agentmux-example-exl3-tabby:stable"
+container_name = "agentmux-example-exl3-tabby-main"
+port = 8002
+container_port = 5000
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+health_path = "/v1/models"

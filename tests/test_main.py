@@ -4,9 +4,9 @@ from agentmux.main import run
 
 
 def test_render_json_cli(tmp_path: Path, capsys) -> None:
-    mux_dir = tmp_path / "core"
+    mux_dir = tmp_path / "core" / "demo"
     mux_dir.mkdir(parents=True)
-    (mux_dir / "demo.toml").write_text(
+    (mux_dir / "mux.toml").write_text(
         """
 [mux]
 name = "demo"
@@ -15,6 +15,7 @@ name = "demo"
 image = "localhost/demo:latest"
 container_name = "agentmux-demo-main"
 port = 8002
+container_port = 5000
 """.strip()
         + "\n",
         encoding="utf-8",
@@ -27,3 +28,4 @@ port = 8002
     assert '"mux": "demo"' in out
     assert '"container_name": "agentmux-demo-main"' in out
     assert '"podman"' in out
+    assert '"8002:5000"' in out

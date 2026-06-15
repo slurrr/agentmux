@@ -1,9 +1,0 @@
-[mux]
-name = "gemma-4-12b-it-exl3"
-primary_service = "main"
-notes = "Lab mux promoted from workspace-exl3 for agentic workflow proving."
-
-[services.main]
-workspace_export = "./exports/gemma-4-12b-it-exl3"
-container_name = "agentmux-gemma-4-12b-it-exl3-main"
-port = 8002

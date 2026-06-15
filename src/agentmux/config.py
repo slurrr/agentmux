@@ -9,7 +9,7 @@ from typing import Any
 
 MUX_ROOT = Path("mux")
 TRACKS = ("core", "lab", "examples")
-EXPORT_FILENAME = "agentmux-service.toml"
+MUX_FILENAME = "mux.toml"
 ENV_PATTERN = re.compile(
     r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<bare>[A-Za-z_][A-Za-z0-9_]*))"
 )
@@ -28,13 +28,6 @@ class VolumeSpec:
 
 
 @dataclass(frozen=True)
-class WorkspaceExportSpec:
-    path: str
-    name: str | None
-    backend: str | None
-
-
-@dataclass(frozen=True)
 class ServiceSpec:
     name: str
     image: str
@@ -49,9 +42,7 @@ class ServiceSpec:
     volumes: list[VolumeSpec]
     command: list[str]
     health_path: str
-    runtime_target: str | None
-    runtime_dir: str | None
-    workspace_export: WorkspaceExportSpec | None = None
+    runtime_dir: str
     notes: str | None = None
 
 
@@ -77,10 +68,10 @@ def _expand_env(text: str, field_name: str) -> str:
     return expanded
 
 
-def _expand_path(text: str, field_name: str, base_path: Path) -> str:
+def _expand_path(text: str, field_name: str, manifest_path: Path) -> str:
     expanded = Path(_expand_env(text, field_name)).expanduser()
     if not expanded.is_absolute():
-        expanded = (base_path.parent / expanded).resolve()
+        expanded = (manifest_path.parent / expanded).resolve()
     return str(expanded)
 
 
@@ -133,7 +124,7 @@ def _as_str_dict(value: object, field_name: str) -> dict[str, str]:
     return result
 
 
-def _as_volumes(value: object, field_name: str, base_path: Path) -> list[VolumeSpec]:
+def _as_volumes(value: object, field_name: str, manifest_path: Path) -> list[VolumeSpec]:
     if value is None:
         return []
     if not isinstance(value, list):
@@ -154,7 +145,7 @@ def _as_volumes(value: object, field_name: str, base_path: Path) -> list[VolumeS
             raise ValueError(f"{item_field}.mode must be a non-empty string")
         volumes.append(
             VolumeSpec(
-                source=_expand_path(source, f"{item_field}.source", base_path),
+                source=_expand_path(source, f"{item_field}.source", manifest_path),
                 target=_expand_env(target, f"{item_field}.target"),
                 mode=_expand_env(mode, f"{item_field}.mode") if mode is not None else None,
             )
@@ -162,81 +153,18 @@ def _as_volumes(value: object, field_name: str, base_path: Path) -> list[VolumeS
     return volumes
 
 
-def _merge_dicts(*dicts: dict[str, str]) -> dict[str, str]:
-    merged: dict[str, str] = {}
-    for values in dicts:
-        merged.update(values)
+def _merge_dicts(defaults: dict[str, str], service: dict[str, str]) -> dict[str, str]:
+    merged = dict(defaults)
+    merged.update(service)
     return merged
 
 
-def _raw_table(data: dict[str, object], key: str, field_name: str) -> dict[str, object]:
-    value = data.get(key, {})
-    if not isinstance(value, dict):
-        raise ValueError(f"{field_name} must be a table")
-    return value
+def _runtime_dir(mux_name: str, service_name: str) -> str:
+    return str(Path.home() / "runs" / "agentmux" / mux_name / service_name)
 
 
-def _resolve_export_path(value: object, field_name: str, manifest_path: Path) -> Path | None:
-    if value is None:
-        return None
-    raw = _as_str(value, field_name, required=True)
-    assert raw is not None
-    export_path = Path(_expand_path(raw, field_name, manifest_path))
-    if export_path.is_dir():
-        export_path = export_path / EXPORT_FILENAME
-    if not export_path.exists():
-        raise ValueError(f"{field_name} does not exist: {export_path}")
-    return export_path
-
-
-def _load_workspace_export(
-    value: object,
-    field_name: str,
-    manifest_path: Path,
-) -> tuple[dict[str, object], Path | None, WorkspaceExportSpec | None]:
-    export_path = _resolve_export_path(value, field_name, manifest_path)
-    if export_path is None:
-        return {}, None, None
-
-    data = _load_toml(export_path)
-    meta = _raw_table(data, "agentmux_export", f"{field_name}.agentmux_export")
-    version = meta.get("version")
-    if version != 1:
-        raise ValueError(f"{field_name}.agentmux_export.version must be 1")
-    service = _raw_table(data, "service", f"{field_name}.service")
-    return (
-        service,
-        export_path,
-        WorkspaceExportSpec(
-            path=str(export_path),
-            name=_as_str(meta.get("name"), f"{field_name}.agentmux_export.name"),
-            backend=_as_str(meta.get("backend"), f"{field_name}.agentmux_export.backend"),
-        ),
-    )
-
-
-def _first_value(*values: object) -> object:
-    for value in values:
-        if value is not None:
-            return value
-    return None
-
-
-def _runtime_volume(
-    mux_name: str,
-    service_name: str,
-    runtime_target: str | None,
-    runtime_dir: str | None,
-    manifest_path: Path,
-) -> VolumeSpec | None:
-    if runtime_target is None:
-        return None
-    source = runtime_dir or str(Path.home() / "runs" / "agentmux" / mux_name / service_name)
-    return VolumeSpec(
-        source=_expand_path(source, f"services.{service_name}.runtime_dir", manifest_path),
-        target=runtime_target,
-        mode="rw",
-    )
+def _runtime_volume(mux_name: str, service_name: str) -> VolumeSpec:
+    return VolumeSpec(source=_runtime_dir(mux_name, service_name), target="/runs", mode="rw")
 
 
 def _parse_service(
@@ -247,7 +175,6 @@ def _parse_service(
     manifest_path: Path,
 ) -> ServiceSpec:
     allowed = {
-        "workspace_export",
         "image",
         "container_name",
         "host",
@@ -260,72 +187,39 @@ def _parse_service(
         "volumes",
         "command",
         "health_path",
-        "runtime_target",
-        "runtime_dir",
         "notes",
     }
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ValueError(f"services.{name} contains unsupported field(s): {', '.join(unknown)}")
 
-    export_raw, export_path, export_spec = _load_workspace_export(
-        raw.get("workspace_export"), f"services.{name}.workspace_export", manifest_path
-    )
-    export_base_path = export_path or manifest_path
-
-    image = _as_str(
-        _first_value(raw.get("image"), export_raw.get("image")),
-        f"services.{name}.image",
-        required=True,
-    )
+    image = _as_str(raw.get("image"), f"services.{name}.image", required=True)
     container_name = _as_str(
         raw.get("container_name"), f"services.{name}.container_name", required=True
     )
     port = _as_int(raw.get("port"), f"services.{name}.port", required=True)
-    container_port = _as_int(
-        _first_value(raw.get("container_port"), export_raw.get("container_port"), port),
-        f"services.{name}.container_port",
-        required=True,
-    )
+    container_port = _as_int(raw.get("container_port", port), f"services.{name}.container_port")
     assert image is not None
     assert container_name is not None
     assert port is not None
     assert container_port is not None
 
     default_env = _as_str_dict(defaults.get("env"), "defaults.env")
-    export_env = _as_str_dict(export_raw.get("env"), f"services.{name}.workspace_export.env")
     service_env = _as_str_dict(raw.get("env"), f"services.{name}.env")
     default_labels = _as_str_dict(defaults.get("labels"), "defaults.labels")
-    export_labels = _as_str_dict(
-        export_raw.get("labels"), f"services.{name}.workspace_export.labels"
-    )
     service_labels = _as_str_dict(raw.get("labels"), f"services.{name}.labels")
-
-    runtime_target = _as_str(
-        _first_value(raw.get("runtime_target"), export_raw.get("runtime_target")),
-        f"services.{name}.runtime_target",
-    )
-    runtime_dir = _as_str(raw.get("runtime_dir"), f"services.{name}.runtime_dir")
-
-    export_volumes = _as_volumes(
-        export_raw.get("volumes"),
-        f"services.{name}.workspace_export.volumes",
-        export_base_path,
-    )
-    volumes = (
-        _as_volumes(defaults.get("volumes"), "defaults.volumes", manifest_path)
-        + export_volumes
-        + _as_volumes(raw.get("volumes"), f"services.{name}.volumes", manifest_path)
-    )
-    runtime_mount = _runtime_volume(mux_name, name, runtime_target, runtime_dir, manifest_path)
-    if runtime_mount is not None:
-        volumes.append(runtime_mount)
 
     ports = _as_str_list(defaults.get("ports"), "defaults.ports") + _as_str_list(
         raw.get("ports"), f"services.{name}.ports"
     )
     if not ports:
         ports = [f"{port}:{container_port}"]
+
+    volumes = (
+        _as_volumes(defaults.get("volumes"), "defaults.volumes", manifest_path)
+        + _as_volumes(raw.get("volumes"), f"services.{name}.volumes", manifest_path)
+        + [_runtime_volume(mux_name, name)]
+    )
 
     return ServiceSpec(
         name=name,
@@ -336,27 +230,18 @@ def _parse_service(
         port=port,
         container_port=container_port,
         podman_args=_as_str_list(defaults.get("podman_args"), "defaults.podman_args")
-        + _as_str_list(
-            export_raw.get("podman_args"),
-            f"services.{name}.workspace_export.podman_args",
-        )
         + _as_str_list(raw.get("podman_args"), f"services.{name}.podman_args"),
-        env=_merge_dicts(default_env, export_env, service_env),
-        labels=_merge_dicts(default_labels, export_labels, service_labels),
+        env=_merge_dicts(default_env, service_env),
+        labels=_merge_dicts(default_labels, service_labels),
         ports=ports,
         volumes=volumes,
-        command=_as_str_list(
-            _first_value(raw.get("command"), export_raw.get("command")),
-            f"services.{name}.command",
-        ),
+        command=_as_str_list(raw.get("command"), f"services.{name}.command"),
         health_path=_as_str(
-            _first_value(raw.get("health_path"), export_raw.get("health_path"), "/v1/models"),
+            raw.get("health_path", defaults.get("health_path", "/v1/models")),
             f"services.{name}.health_path",
         )
         or "/v1/models",
-        runtime_target=runtime_target,
-        runtime_dir=runtime_mount.source if runtime_mount is not None else runtime_dir,
-        workspace_export=export_spec,
+        runtime_dir=_runtime_dir(mux_name, name),
         notes=_as_str(raw.get("notes"), f"services.{name}.notes"),
     )
 
@@ -418,15 +303,13 @@ def iter_muxes(root: Path = MUX_ROOT) -> list[MuxSpec]:
         track_dir = root / track
         if not track_dir.is_dir():
             continue
-        for path in sorted(track_dir.rglob("*.toml")):
-            if path.name == EXPORT_FILENAME:
-                continue
+        for path in sorted(track_dir.rglob(MUX_FILENAME)):
             muxes.append(load_mux(path, root=root))
     return muxes
 
 
 def resolve_mux(name: str, root: Path = MUX_ROOT) -> MuxSpec:
-    matches = [mux for mux in iter_muxes(root) if mux.name == name or mux.path.stem == name]
+    matches = [mux for mux in iter_muxes(root) if mux.name == name or mux.path.parent.name == name]
     if not matches:
         raise ValueError(f"Mux not found: {name}")
     if len(matches) > 1:

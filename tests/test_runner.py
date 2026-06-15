@@ -4,9 +4,9 @@ from agentmux.runner import build_mux_plan
 
 
 def test_build_mux_plan_renders_exact_podman_command(tmp_path: Path) -> None:
-    mux_dir = tmp_path / "core"
+    mux_dir = tmp_path / "core" / "demo"
     mux_dir.mkdir(parents=True)
-    (mux_dir / "demo.toml").write_text(
+    (mux_dir / "mux.toml").write_text(
         """
 [mux]
 name = "demo"
@@ -20,16 +20,11 @@ HF_HOME = "/models/hf"
 [defaults.labels]
 owner = "agentmux"
 
-[[defaults.volumes]]
-source = "~/models"
-target = "/models"
-mode = "ro"
-
 [services.main]
 image = "localhost/llm-demo:latest"
 container_name = "agentmux-demo-main"
 port = 8002
-ports = ["8002:8002"]
+container_port = 5000
 command = ["backend", "--serve"]
 """.strip()
         + "\n",
@@ -52,8 +47,9 @@ command = ["backend", "--serve"]
     assert ["--env", "HF_HOME=/models/hf"] == command[
         command.index("--env") : command.index("--env") + 2
     ]
-    assert ["--publish", "8002:8002"] == command[
+    assert ["--publish", "8002:5000"] == command[
         command.index("--publish") : command.index("--publish") + 2
     ]
     assert command[-3:] == ["localhost/llm-demo:latest", "backend", "--serve"]
+    assert f"{Path.home()}/runs/agentmux/demo/main:/runs:rw" in command
     assert plan.services[0].health_url == "http://127.0.0.1:8002/v1/models"
