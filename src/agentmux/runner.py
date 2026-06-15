@@ -125,6 +125,10 @@ def launch_mux(
 
     try:
         for service in plan.services:
+            service_spec = plan.mux.services[service.service]
+            if service_spec.runtime_dir is not None:
+                Path(service_spec.runtime_dir).mkdir(parents=True, exist_ok=True)
+
             result = subprocess.run(
                 service.command,
                 check=True,

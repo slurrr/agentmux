@@ -1,43 +1,16 @@
 [mux]
 name = "example-exl3-tabby"
 primary_service = "main"
-notes = "Example AgentMux v2 service exported from an ExLlamaV3/TabbyAPI workspace."
-
-[defaults]
-podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
-
-[defaults.env]
-HF_HOME = "/models/hf"
-
-[[defaults.volumes]]
-source = "~/models"
-target = "/models"
-mode = "ro"
+notes = "Normal AgentMux shape: consume the workspace export, choose identity and host port."
 
 [services.main]
-image = "localhost/llm-tabby:latest"
+workspace_export = "./exports/example-exl3-tabby"
 container_name = "agentmux-example-exl3-tabby-main"
-host = "127.0.0.1"
 port = 8002
-ports = ["8002:8002"]
-health_path = "/v1/models"
 
-[[services.main.volumes]]
-source = "~/code/dev/workspace-exl3/configs/deployments/example-stable.yml"
-target = "/app/tabbyAPI/config.yml"
-mode = "ro"
-
-[[services.main.volumes]]
-source = "~/code/dev/workspace-exl3/configs/templates"
-target = "/app/tabbyAPI/templates"
-mode = "ro"
-
-[[services.main.volumes]]
-source = "~/code/dev/workspace-exl3/configs/sampler_overrides"
-target = "/app/tabbyAPI/sampler_overrides"
-mode = "ro"
-
-[[services.main.volumes]]
-source = "~/runs/agentmux/example-exl3-tabby/main"
-target = "/app/data"
-mode = "rw"
+# Optional escape hatch: AgentMux can still add mux-local mounts when needed.
+# The workspace export should already contain backend-required mounts.
+# [[services.main.volumes]]
+# source = "~/data/some-agent-sidecar-input"
+# target = "/agentmux/extra"
+# mode = "ro"

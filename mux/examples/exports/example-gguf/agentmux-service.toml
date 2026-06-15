@@ -1,0 +1,26 @@
+[agentmux_export]
+version = 1
+name = "example-gguf"
+backend = "gguf-llamacpp"
+notes = "Example of what workspace-gguf should export after a preset is promoted."
+
+[service]
+image = "localhost/llm-gguf:latest"
+container_port = 5000
+health_path = "/v1/models"
+runtime_target = "/runs"
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+command = ["llama-server", "--config", "/deployment/llama-server.yml"]
+
+[service.env]
+HF_HOME = "/models/hf"
+
+[[service.volumes]]
+source = "~/models"
+target = "/models"
+mode = "ro"
+
+[[service.volumes]]
+source = "./llama-server.yml"
+target = "/deployment/llama-server.yml"
+mode = "ro"

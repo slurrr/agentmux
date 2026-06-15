@@ -1,34 +1,17 @@
 [mux]
 name = "example-gguf"
 primary_service = "main"
-notes = "Example AgentMux v2 service exported from a GGUF/llama.cpp workspace."
-
-[defaults]
-podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
-
-[defaults.env]
-HF_HOME = "/models/hf"
-
-[[defaults.volumes]]
-source = "~/models"
-target = "/models"
-mode = "ro"
+notes = "Normal AgentMux shape: workspace-gguf exports the serving appliance recipe."
 
 [services.main]
-image = "localhost/llm-gguf:latest"
+workspace_export = "./exports/example-gguf"
 container_name = "agentmux-example-gguf-main"
-host = "127.0.0.1"
 port = 8002
-ports = ["8002:8002"]
-command = ["llama-server", "--config", "/workspace/configs/llama-server.yml"]
-health_path = "/v1/models"
 
-[[services.main.volumes]]
-source = "~/code/dev/workspace-gguf/configs/deployments/example.yml"
-target = "/workspace/configs/llama-server.yml"
-mode = "ro"
-
-[[services.main.volumes]]
-source = "~/runs/agentmux/example-gguf/main"
-target = "/runs"
-mode = "rw"
+# Optional override examples:
+# container_port = 5000              # only needed if overriding the export
+# podman_args = ["--cpus", "8"]      # appended after export podman_args
+# [[services.main.volumes]]          # appended after export volumes
+# source = "~/runs/some-extra-input"
+# target = "/extra"
+# mode = "ro"

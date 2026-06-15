@@ -77,3 +77,61 @@ def test_iter_muxes_uses_tracks(tmp_path: Path) -> None:
     muxes = iter_muxes(tmp_path)
     assert [mux.name for mux in muxes] == ["demo"]
     assert muxes[0].track == "core"
+
+
+def test_workspace_export_supplies_backend_recipe(tmp_path: Path) -> None:
+    export_dir = tmp_path / "core" / "exports" / "demo"
+    export_dir.mkdir(parents=True)
+    (export_dir / "agentmux-service.toml").write_text(
+        """
+[agentmux_export]
+version = 1
+name = "demo"
+backend = "test-backend"
+
+[service]
+image = "localhost/exported:latest"
+container_port = 5000
+runtime_target = "/data"
+podman_args = ["--device", "nvidia.com/gpu=all"]
+command = ["serve"]
+
+[service.env]
+A = "export"
+
+[[service.volumes]]
+source = "./config.yml"
+target = "/config.yml"
+mode = "ro"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "core" / "demo.toml").write_text(
+        """
+[mux]
+name = "demo"
+
+[services.main]
+workspace_export = "./exports/demo"
+container_name = "agentmux-demo-main"
+port = 8002
+
+[services.main.env]
+A = "service"
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    mux = resolve_mux("demo", root=tmp_path)
+    service = mux.services["main"]
+
+    assert service.image == "localhost/exported:latest"
+    assert service.container_port == 5000
+    assert service.ports == ["8002:5000"]
+    assert service.env == {"A": "service"}
+    assert service.runtime_dir == str(Path.home() / "runs" / "agentmux" / "demo" / "main")
+    assert service.volumes[-1].podman_value().endswith(":/data:rw")
+    assert service.workspace_export is not None
+    assert service.workspace_export.backend == "test-backend"
