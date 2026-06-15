@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PY="$ROOT/.venv-vllm/bin/python"
-exec "$PY" "$ROOT/scripts/gemma4_vllm.py" "$@"

@@ -4,25 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentmux"
-version = "0.1.0"
-description = "Profile-driven vLLM launcher"
+version = "0.2.0"
+description = "Container-first launch cockpit for local agent-serving stacks"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
-dependencies = [
-    "fastapi>=0.116,<1",
-    "httpx>=0.28,<0.29",
-    "python-dotenv>=1.0.0",
-    "requests>=2.32,<3",
-]
+requires-python = ">=3.12"
+dependencies = []
 
 [project.scripts]
 agentmux = "agentmux.main:main"
 
 [dependency-groups]
-dev = ["pytest>=8.0.0", "pyright>=1.1.0", "ruff>=0.11.0", "python-dotenv>=1.0.0"]
-
-[tool.uv]
-environments = ["sys_platform == 'linux'"]
+dev = ["pytest>=8.0.0", "ruff>=0.11.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -39,12 +31,3 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
-
-[tool.ruff.format]
-quote-style = "double"
-
-[tool.pyright]
-typeCheckingMode = "basic"
-reportMissingImports = false
-venvPath = "."
-venv = ".venv-vllm"

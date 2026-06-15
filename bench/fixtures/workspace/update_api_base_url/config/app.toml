@@ -1,4 +1,0 @@
-[service]
-name = "web-api"
-api_base_url = "https://staging-api.example.com/v1"
-request_timeout_secs = 30

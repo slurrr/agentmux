@@ -1,185 +1,79 @@
 from pathlib import Path
 
-from agentmux.config import list_stacks, resolve_stack
+from agentmux.config import iter_muxes, resolve_mux
 
 
-def test_list_stacks_finds_tracks() -> None:
-    stacks = list_stacks(include_archive=True)
-    names = {stack.name for stack in stacks}
-    assert "qwen3_5" in names
-    assert "example_vllm_recipes" in names
-    assert "example_two_service" in names
-
-
-def test_resolve_stack_parses_services() -> None:
-    stack = resolve_stack("example_vllm_recipes")
-    assert stack.track == "examples"
-    assert stack.primary_service == "generalist"
-    assert stack.services["generalist"].args["attention_backend"] == "FLASH_ATTN"
-    assert stack.services["generalist"].args["enable_prefix_caching"] is True
-
-
-def test_resolve_stack_supports_multi_service_shape() -> None:
-    stack = resolve_stack("example_two_service")
-    assert len(stack.services) == 2
-    assert stack.primary_service == "router_default"
-    assert stack.services["coder"].assets.values["chat_template"] == "assets/chat_templates/coder.jinja"
-
-
-def test_resolve_stack_supports_bench_track_example() -> None:
-    stack = resolve_stack("example_bench_mux")
-    assert stack.track == "examples"
-    assert stack.services["main"].args["generation_config"] == "vllm"
-    assert stack.services["main"].args["max_model_len"] == 8192
-
-
-def test_resolve_stack_loads_system_prompt_asset() -> None:
-    stack = resolve_stack("example_vllm_recipes")
-    assert stack.services["generalist"].assets.values["system_prompt"] == "assets/prompts/generalist_system.md"
-
-
-def test_resolve_stack_supports_hindsight_service_shape() -> None:
-    stack = resolve_stack("example_hindsight_memory")
-    memory = stack.services["memory"]
-    assert memory.engine == "hindsight"
-    assert memory.runtime_bin_dir == ".venv-hindsight/bin"
-    assert memory.data_dir == str(Path("~/data/hindsight").expanduser())
-    assert memory.llm_service == "main"
-
-
-def test_resolve_stack_expands_env_backed_model_paths(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / ".env").write_text("TEST_MODEL_ROOT=/models\n", encoding="utf-8")
-    mux_root = tmp_path / "mux" / "core"
-    mux_root.mkdir(parents=True)
-    stack_path = mux_root / "local_model.toml"
-    stack_path.write_text(
+def write_mux(root: Path) -> None:
+    path = root / "core" / "demo.toml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
         """
-[stack]
-name = "local_model"
-track = "core"
+[mux]
+name = "demo"
 primary_service = "main"
 
-[services.main]
-engine = "vllm"
-model = "${TEST_MODEL_ROOT}/Qwen/Test"
-port = 8000
-        """.strip()
-        + "\n",
-        encoding="utf-8",
-    )
+[defaults]
+podman_args = ["--security-opt", "label=disable"]
+ports = ["8002:8002"]
 
-    stack = resolve_stack("local_model", root=tmp_path / "mux")
-    assert stack.services["main"].model == "/models/Qwen/Test"
+[defaults.env]
+HF_HOME = "/models/hf"
+A = "default"
 
-
-def test_resolve_stack_merges_default_args_and_env() -> None:
-    stack = resolve_stack("example_vllm_recipes")
-    service = stack.services["reasoner"]
-    assert service.args["dtype"] == "bfloat16"
-    assert service.args["gpu_memory_utilization"] == 0.92
-    assert service.args["attention_backend"] == "FLASH_ATTN"
-    assert service.env["CUDA_VISIBLE_DEVICES"] == "1"
-
-
-def test_resolve_stack_merges_default_assets() -> None:
-    stack = resolve_stack("example_vllm_recipes")
-    service = stack.services["reasoner"]
-    assert service.assets.values["tokenizer"].endswith("/SharedTokenizer")
-    assert service.assets.values["chat_template"] == "assets/chat_templates/deepseek_reasoning.jinja"
-
-
-def test_resolve_stack_supports_llamacpp_service_shape(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    mux_root = tmp_path / "mux" / "lab"
-    mux_root.mkdir(parents=True)
-    (mux_root / "llamacpp.toml").write_text(
-        """
-[stack]
-name = "llamacpp"
-track = "lab"
-primary_service = "main"
+[[defaults.volumes]]
+source = "./shared"
+target = "/shared"
+mode = "ro"
 
 [services.main]
-engine = "llamacpp"
-runtime_bin_dir = "~/.local/bin"
-model = "/models/demo.gguf"
-host = "127.0.0.1"
-port = 18080
-served_model_name = "demo-gguf"
-extra_args = ["--threads", "8"]
+image = "localhost/demo:latest"
+container_name = "agentmux-demo-main"
+port = 8002
+podman_args = ["--device", "nvidia.com/gpu=all"]
+command = ["serve", "--config", "/config.yml"]
 
 [services.main.env]
-CUDA_VISIBLE_DEVICES = "0"
-        """.strip()
+A = "service"
+B = "only-service"
+
+[[services.main.volumes]]
+source = "~/models"
+target = "/models"
+mode = "ro"
+""".strip()
         + "\n",
         encoding="utf-8",
     )
 
-    stack = resolve_stack("llamacpp", root=tmp_path / "mux")
-    service = stack.services["main"]
-    assert service.engine == "llamacpp"
-    assert service.runtime_bin_dir == "~/.local/bin"
-    assert service.model == "/models/demo.gguf"
-    assert service.served_model_name == "demo-gguf"
-    assert service.extra_args == ["--threads", "8"]
+
+def test_resolve_mux_merges_defaults(tmp_path: Path) -> None:
+    write_mux(tmp_path)
+    mux = resolve_mux("demo", root=tmp_path)
+    service = mux.services["main"]
+
+    assert mux.name == "demo"
+    assert mux.primary_service == "main"
+    assert service.image == "localhost/demo:latest"
+    assert service.container_name == "agentmux-demo-main"
+    assert service.host == "127.0.0.1"
+    assert service.podman_args == [
+        "--security-opt",
+        "label=disable",
+        "--device",
+        "nvidia.com/gpu=all",
+    ]
+    assert service.ports == ["8002:8002"]
+    assert service.env == {
+        "HF_HOME": "/models/hf",
+        "A": "service",
+        "B": "only-service",
+    }
+    assert service.volumes[0].source == str((tmp_path / "core" / "shared").resolve())
+    assert service.volumes[0].podman_value().endswith(":/shared:ro")
 
 
-def test_resolve_stack_supports_llamacpp_hf_repo_shape(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    mux_root = tmp_path / "mux" / "lab"
-    mux_root.mkdir(parents=True)
-    (mux_root / "llamacpp_hf.toml").write_text(
-        """
-[stack]
-name = "llamacpp_hf"
-track = "lab"
-primary_service = "main"
-
-[services.main]
-engine = "llamacpp"
-hf_repo = "unsloth/Qwen3.5-4B-GGUF"
-hf_file = "Qwen3.5-4B-UD-Q4_K_XL.gguf"
-host = "127.0.0.1"
-port = 18080
-        """.strip()
-        + "\n",
-        encoding="utf-8",
-    )
-
-    stack = resolve_stack("llamacpp_hf", root=tmp_path / "mux")
-    service = stack.services["main"]
-    assert service.hf_repo == "unsloth/Qwen3.5-4B-GGUF"
-    assert service.hf_file == "Qwen3.5-4B-UD-Q4_K_XL.gguf"
-    assert service.model is None
-
-
-def test_hindsight_llm_service_allows_llamacpp_target(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    mux_root = tmp_path / "mux" / "lab"
-    mux_root.mkdir(parents=True)
-    (mux_root / "hindsight_llamacpp.toml").write_text(
-        """
-[stack]
-name = "hindsight_llamacpp"
-track = "lab"
-primary_service = "main"
-
-[services.main]
-engine = "llamacpp"
-model = "/models/demo.gguf"
-host = "127.0.0.1"
-port = 18080
-
-[services.memory]
-engine = "hindsight"
-host = "127.0.0.1"
-port = 18888
-llm_service = "main"
-        """.strip()
-        + "\n",
-        encoding="utf-8",
-    )
-
-    stack = resolve_stack("hindsight_llamacpp", root=tmp_path / "mux")
-    assert stack.services["memory"].llm_service == "main"
+def test_iter_muxes_uses_tracks(tmp_path: Path) -> None:
+    write_mux(tmp_path)
+    muxes = iter_muxes(tmp_path)
+    assert [mux.name for mux in muxes] == ["demo"]
+    assert muxes[0].track == "core"

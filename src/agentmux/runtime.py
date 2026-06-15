@@ -2,29 +2,22 @@ from __future__ import annotations
 
 import json
 import os
-import signal
+import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-def _runtime_root() -> Path:
+
+def runtime_root() -> Path:
     configured = os.environ.get("AGENTMUX_RUN_ROOT", "").strip()
     if configured:
         return Path(configured).expanduser()
     return Path.home() / "runs" / "agentmux"
 
 
-def runtime_root() -> Path:
-    return _runtime_root()
-
-
 def state_dir() -> Path:
     return runtime_root() / "state"
-
-
-def log_dir() -> Path:
-    return runtime_root() / "logs"
 
 
 def active_path() -> Path:
@@ -38,17 +31,20 @@ def history_path() -> Path:
 @dataclass(frozen=True)
 class RuntimeService:
     name: str
-    pid: int
+    container_name: str
+    container_id: str
+    image: str
+    host: str
     port: int
     command: list[str]
-    log_path: str
+    health_url: str
     started_at: float
     managed: bool = True
 
 
 @dataclass(frozen=True)
 class RuntimeStack:
-    stack: str
+    mux: str
     track: str
     path: str
     services: list[RuntimeService]
@@ -57,30 +53,34 @@ class RuntimeStack:
 
 def ensure_runtime_dirs() -> None:
     state_dir().mkdir(parents=True, exist_ok=True)
-    log_dir().mkdir(parents=True, exist_ok=True)
 
 
 def write_active(runtime_stack: RuntimeStack) -> None:
     ensure_runtime_dirs()
-    active_path().write_text(json.dumps(asdict(runtime_stack), indent=2) + "\n", encoding="utf-8")
+    payload = json.dumps(asdict(runtime_stack), indent=2) + "\n"
+    active_path().write_text(payload, encoding="utf-8")
     with history_path().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(asdict(runtime_stack)) + "\n")
+
+
+def _runtime_stack_from_data(data: dict[str, Any]) -> RuntimeStack:
+    return RuntimeStack(
+        mux=data["mux"],
+        track=data["track"],
+        path=data["path"],
+        services=[RuntimeService(**service) for service in data["services"]],
+        started_at=data["started_at"],
+    )
 
 
 def read_active(*, prune_stale: bool = False) -> RuntimeStack | None:
     path = active_path()
     if not path.exists():
         return None
-    data = json.loads(path.read_text(encoding="utf-8"))
-    services = [RuntimeService(**service) for service in data["services"]]
-    runtime_stack = RuntimeStack(
-        stack=data["stack"],
-        track=data["track"],
-        path=data["path"],
-        services=services,
-        started_at=data["started_at"],
-    )
-    if prune_stale and runtime_stack.services and not any(pid_is_running(service.pid) for service in runtime_stack.services):
+    runtime_stack = _runtime_stack_from_data(json.loads(path.read_text(encoding="utf-8")))
+    if prune_stale and runtime_stack.services and not any(
+        container_is_running(service.container_name) for service in runtime_stack.services
+    ):
         clear_active()
         return None
     return runtime_stack
@@ -98,63 +98,58 @@ def load_history(limit: int = 20) -> list[RuntimeStack]:
         return []
     entries: list[RuntimeStack] = []
     for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
-        if not line.strip():
-            continue
-        data = json.loads(line)
-        services = [RuntimeService(**service) for service in data["services"]]
-        entries.append(
-            RuntimeStack(
-                stack=data["stack"],
-                track=data["track"],
-                path=data["path"],
-                services=services,
-                started_at=data["started_at"],
-            )
-        )
+        if line.strip():
+            entries.append(_runtime_stack_from_data(json.loads(line)))
     return entries
 
 
-def pid_is_running(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    proc_dir = Path("/proc") / str(pid)
-    stat_path = proc_dir / "stat"
-    if stat_path.exists():
-        try:
-            stat_fields = stat_path.read_text(encoding="utf-8").split()
-        except OSError:
-            stat_fields = []
-        if len(stat_fields) >= 3 and stat_fields[2] == "Z":
-            return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+def _podman(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["podman", *args],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def container_is_running(container_name: str) -> bool:
+    result = _podman(["inspect", "--format", "{{.State.Running}}", container_name])
+    return result.returncode == 0 and result.stdout.strip().lower() == "true"
+
+
+def container_status(container_name: str) -> str:
+    result = _podman(["inspect", "--format", "{{.State.Status}}", container_name])
+    if result.returncode != 0:
+        return "missing"
+    return result.stdout.strip() or "unknown"
 
 
 def runtime_status(runtime_stack: RuntimeStack | None) -> dict[str, Any]:
     if runtime_stack is None:
-        return {"active": False, "stack": None, "services": []}
+        return {"active": False, "mux": None, "services": []}
 
-    services = []
+    services: list[dict[str, Any]] = []
     for service in runtime_stack.services:
+        running = container_is_running(service.container_name)
         services.append(
             {
                 "name": service.name,
-                "pid": service.pid,
+                "container_name": service.container_name,
+                "container_id": service.container_id,
+                "image": service.image,
+                "host": service.host,
                 "port": service.port,
-                "running": pid_is_running(service.pid),
-                "log_path": service.log_path,
+                "health_url": service.health_url,
+                "running": running,
+                "status": "running" if running else container_status(service.container_name),
                 "started_at": service.started_at,
             }
         )
 
     return {
         "active": any(item["running"] for item in services),
-        "stack": runtime_stack.stack,
+        "mux": runtime_stack.mux,
         "track": runtime_stack.track,
         "path": runtime_stack.path,
         "started_at": runtime_stack.started_at,
@@ -162,64 +157,19 @@ def runtime_status(runtime_stack: RuntimeStack | None) -> dict[str, Any]:
     }
 
 
-def _wait_for_service_exit(pid: int, timeout_seconds: float = 10.0) -> bool:
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        if not pid_is_running(pid):
-            _reap_child_process(pid)
-            return True
-        time.sleep(0.1)
-    if not pid_is_running(pid):
-        _reap_child_process(pid)
-        return True
-    return False
-
-
-def _reap_child_process(pid: int) -> None:
-    try:
-        while True:
-            waited_pid, _status = os.waitpid(pid, os.WNOHANG)
-            if waited_pid == 0:
-                return
-            if waited_pid == pid:
-                return
-    except ChildProcessError:
-        return
-
-
 def stop_runtime(runtime_stack: RuntimeStack) -> None:
-    for service in runtime_stack.services:
-        if not service.managed or service.pid <= 0:
-            continue
-        try:
-            pgid = os.getpgid(service.pid)
-        except ProcessLookupError:
-            _reap_child_process(service.pid)
-            continue
-        try:
-            os.killpg(pgid, signal.SIGINT)
-        except ProcessLookupError:
-            _reap_child_process(service.pid)
-            continue
-        if _wait_for_service_exit(service.pid):
-            continue
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-        except ProcessLookupError:
-            _reap_child_process(service.pid)
-            continue
-        if _wait_for_service_exit(service.pid):
-            continue
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            _reap_child_process(service.pid)
-            continue
-        _wait_for_service_exit(service.pid, timeout_seconds=2.0)
+    for service in reversed(runtime_stack.services):
+        if service.managed:
+            subprocess.run(["podman", "rm", "--force", service.container_name], check=False)
     clear_active()
 
 
-def next_log_path(stack_name: str, service_name: str) -> Path:
-    ensure_runtime_dirs()
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    return log_dir() / f"{stamp}-{stack_name}-{service_name}.log"
+def format_age(started_at: float) -> str:
+    seconds = max(0, int(time.time() - started_at))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"

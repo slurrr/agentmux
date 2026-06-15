@@ -1,4 +1,0 @@
-[service]
-name = "web-api"
-timeout_secs = 45
-api_base_url = "https://api.example.com/v1"

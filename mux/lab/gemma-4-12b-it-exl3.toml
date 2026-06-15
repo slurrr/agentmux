@@ -1,0 +1,53 @@
+[mux]
+name = "gemma-4-12b-it-exl3"
+primary_service = "main"
+notes = "Promoted TabbyAPI/ExLlamaV3 deployment from workspace-exl3."
+
+[defaults]
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+
+[defaults.env]
+HF_HOME = "/models/hf"
+
+[[defaults.volumes]]
+source = "~/models"
+target = "/models"
+mode = "ro"
+
+[services.main]
+image = "localhost/llm-tabby:latest"
+container_name = "agentmux-gemma-4-12b-it-exl3-main"
+host = "127.0.0.1"
+port = 8002
+ports = ["8002:8002"]
+health_path = "/v1/models"
+
+[[services.main.volumes]]
+source = "~/code/dev/workspace-exl3/configs/deployments/gemma-4-12b-it-stable.yml"
+target = "/app/tabbyAPI/config.yml"
+mode = "ro"
+
+[[services.main.volumes]]
+source = "~/code/dev/workspace-exl3/configs/templates"
+target = "/app/tabbyAPI/templates"
+mode = "ro"
+
+[[services.main.volumes]]
+source = "~/code/dev/workspace-exl3/configs/sampler_overrides"
+target = "/app/tabbyAPI/sampler_overrides"
+mode = "ro"
+
+[[services.main.volumes]]
+source = "~/code/dev/workspace-exl3/configs/loras"
+target = "/app/tabbyAPI/loras"
+mode = "ro"
+
+[[services.main.volumes]]
+source = "~/code/dev/workspace-exl3/configs/api_tokens.yml"
+target = "/app/tabbyAPI/api_tokens.yml"
+mode = "ro"
+
+[[services.main.volumes]]
+source = "~/runs/agentmux/gemma-4-12b-it-exl3/main"
+target = "/app/data"
+mode = "rw"

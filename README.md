@@ -1,76 +1,71 @@
 # agentmux
 
-`agentmux` is a cockpit for building and launching muxes.
+`agentmux` is a container-first launch cockpit for local agent-serving stacks.
 
-A mux is an agent-serving stack that compiles into a real `vllm serve` command. The point of this
-repo is to keep that stack human-composable and organized so you do not have to hand-build the
-exact serve command every time.
+Backend workspaces build images, prove models, generate backend configs, and export deployment-ready service shapes. `agentmux` only owns the clean serving surface: mux manifests, rendered `podman run` commands, container lifecycle, status, and logs.
 
-## What A Mux Contains
-- model target
-- backend/runtime args
-- chat templates
-- LoRAs
-- tokenizer-related assets
-- prompt assets and other parts that turn a raw served model into an agent backend
+## What agentmux does
 
-## Composition Model
-- `[defaults.args]` and `[services.<name>.args]` are for direct `vllm serve` flags.
-- assets are for mux parts like chat templates, tokenizers, and other files that belong to the
-  stack as an agent backend, not just as raw backend flags.
-- LoRAs are stack composition inputs that compile into the final serve command.
-- `render` should always show the real command that will run.
+- read mux manifests from `mux/`
+- render the exact Podman commands that will run
+- launch already-built backend images
+- track active containers under `~/runs/agentmux`
+- stop, show status, and follow logs for managed containers
 
-## Goal
-This repo exists to:
-- create muxes
-- experiment with muxes
-- serve muxes
-- let configured agent frontends request those muxes over an OpenAI-compatible API
+## What agentmux does not do
 
-## Workflow
-- define or edit a mux manifest
-- inspect the rendered command
-- launch it from the CLI or from a UI such as VS Code
-- onboard a new model from HF cache with `agentmux onboard <source>`
-- point agent frontends at the running backend
+- build backend images
+- manage Python/CUDA/backend environments
+- quantize or evaluate models
+- resolve Hugging Face cache paths
+- benchmark model quality
+- mutate backend-specific configs
 
-## Setup
-```bash
-uv venv .venv-vllm
-uv pip install --python .venv-vllm/bin/python -e '.[dev]'
-uv pip install --python .venv-vllm/bin/python 'vllm==0.21.0'
+Those jobs belong in backend workspaces such as `workspace-exl3` and `workspace-gguf`.
 
-uv venv .venv-hindsight
-uv pip install --python .venv-hindsight/bin/python 'hindsight-all==0.5.6' pg0-embedded
+## Manifest shape
+
+```toml
+[mux]
+name = "example-gguf"
+primary_service = "main"
+
+[defaults]
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+
+[defaults.env]
+HF_HOME = "/models/hf"
+
+[[defaults.volumes]]
+source = "~/models"
+target = "/models"
+mode = "ro"
+
+[services.main]
+image = "localhost/llm-gguf:latest"
+container_name = "agentmux-example-gguf-main"
+host = "127.0.0.1"
+port = 8002
+ports = ["8002:8002"]
+command = ["llama-server", "--config", "/workspace/configs/llama-server.yml"]
+health_path = "/v1/models"
+
+[[services.main.volumes]]
+source = "~/code/dev/workspace-gguf/configs/deployments/example.yml"
+target = "/workspace/configs/llama-server.yml"
+mode = "ro"
 ```
 
-## Stack Layout
-- `mux/core/`: known-good muxes you actually use
-- `mux/lab/`: active experiments
-- `mux/bench/`: benchmark-only muxes kept consistent for fair comparisons
-- `mux/archive/`: reference-only shapes and retired ideas
+## Commands
 
-## Common Commands
 ```bash
-.venv-vllm/bin/agentmux list --include-archive
-.venv-vllm/bin/agentmux show qwen3_5_9b
-.venv-vllm/bin/agentmux render qwen3_5_9b
-.venv-vllm/bin/agentmux up qwen3_5_9b --dry-run
-.venv-vllm/bin/agentmux status
-.venv-vllm/bin/agentmux smoke qwen3_5_9b --json
-.venv-vllm/bin/agentmux history
-.venv-vllm/bin/agentmux onboard ~/models/hf/hub/models--Qwen--Qwen3.5-9B --service memory
+agentmux list
+agentmux show example-gguf
+agentmux render example-gguf
+agentmux up example-gguf
+agentmux status
+agentmux logs main -f
+agentmux down
 ```
 
-## Runtime Model
-- `agentmux` launches real vLLM and Hindsight executables from their service-specific envs
-- `vllm` owns serving and logs
-- `agentmux` keeps thin runtime metadata under `~/runs/agentmux/`
-- `.env` is loaded automatically before rendering or launching
-
-## Notes
-- Keep large model and LoRA stores outside the repo and reference them through `.env`-backed paths.
-- Runtime state and logs belong in `~/runs/agentmux/{state,logs}`, not inside the repo tree.
-- Use `render` to verify exactly what command a mux becomes.
-- This repo is for composing agent-serving stacks, not just storing raw backend flags.
+Use `agentmux render <mux>` before `up` whenever you want to inspect the exact launch command.
