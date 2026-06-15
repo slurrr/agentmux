@@ -91,7 +91,7 @@ backend = "test-backend"
 
 [service]
 image = "localhost/exported:latest"
-port = 8002
+container_port = 5000
 runtime_target = "/data"
 podman_args = ["--device", "nvidia.com/gpu=all"]
 command = ["serve"]
@@ -128,46 +128,10 @@ A = "service"
     service = mux.services["main"]
 
     assert service.image == "localhost/exported:latest"
-    assert service.ports == ["8002:8002"]
+    assert service.container_port == 5000
+    assert service.ports == ["8002:5000"]
     assert service.env == {"A": "service"}
     assert service.runtime_dir == str(Path.home() / "runs" / "agentmux" / "demo" / "main")
     assert service.volumes[-1].podman_value().endswith(":/data:rw")
     assert service.workspace_export is not None
     assert service.workspace_export.backend == "test-backend"
-
-
-def test_workspace_export_port_mismatch_is_error(tmp_path: Path) -> None:
-    export_dir = tmp_path / "core" / "exports" / "demo"
-    export_dir.mkdir(parents=True)
-    (export_dir / "agentmux-service.toml").write_text(
-        """
-[agentmux_export]
-version = 1
-
-[service]
-image = "localhost/exported:latest"
-port = 5000
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "core" / "demo.toml").write_text(
-        """
-[mux]
-name = "demo"
-
-[services.main]
-workspace_export = "./exports/demo"
-container_name = "agentmux-demo-main"
-port = 8002
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-
-    try:
-        resolve_mux("demo", root=tmp_path)
-    except ValueError as exc:
-        assert "does not match workspace export" in str(exc)
-    else:
-        raise AssertionError("expected port mismatch to fail")
