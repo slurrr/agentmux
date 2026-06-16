@@ -1,0 +1,35 @@
+server:
+  host: 0.0.0.0
+  port: 5000
+  ctx-size: 131072
+  n-gpu-layers: -1
+  threads: 8
+  parallel: 1
+  cont-batching: true
+  flash-attn: true
+  metrics: true
+  model: /models/active-gguf/hauhau.gguf
+  alias: hauhau
+  cache-type-k: q4_0
+  cache-type-v: q4_0
+  spec-type: ngram-cache
+  reasoning: false
+  reasoning-format: none
+  reasoning-budget: 0
+sampling:
+  temperature: 1.0
+  top-p: 0.95
+  top-k: 64
+  min-p: 0.05
+  xtc-probability: 0.5
+  xtc-threshold: 0.08
+  dry-multiplier: 1.0
+  dry-base: 1.75
+  dry-allowed-length: 3
+runtime:
+  image: localhost/llm-gguf:latest
+  container_name: llama-server
+metadata:
+  architecture: qwen35moe
+  source_gguf: /home/poop/models/hf/hub/models--HauhauCS--Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive/snapshots/f12a584fecbeb5f20001130d8ecd66c9327ae685/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q3_K_P.gguf
+  weights_gb: 17.717

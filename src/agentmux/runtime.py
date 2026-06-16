@@ -77,7 +77,17 @@ def read_active(*, prune_stale: bool = False) -> RuntimeStack | None:
     path = active_path()
     if not path.exists():
         return None
-    runtime_stack = _runtime_stack_from_data(json.loads(path.read_text(encoding="utf-8")))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if "mux" not in data:
+        if prune_stale:
+            clear_active()
+            return None
+        legacy_name = data.get("stack", "legacy")
+        raise RuntimeError(
+            f"active runtime state is from legacy AgentMux stack '{legacy_name}'; "
+            f"remove {path} or run status with pruning"
+        )
+    runtime_stack = _runtime_stack_from_data(data)
     if prune_stale and runtime_stack.services and not any(
         container_is_running(service.container_name) for service in runtime_stack.services
     ):

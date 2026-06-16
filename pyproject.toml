@@ -26,6 +26,9 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 
+[tool.pyright]
+venv = ".venv"
+
 [tool.ruff]
 line-length = 100
 
