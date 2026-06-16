@@ -50,6 +50,9 @@ class MuxLaunchPlan:
 
 def _build_podman_run(service: ServiceSpec) -> list[str]:
     command = ["podman", "run", "--detach", "--replace", "--name", service.container_name]
+    if service.runtime_dir:
+        log_path = Path(service.runtime_dir) / "podman.log"
+        command.extend(["--log-driver", "k8s-file", "--log-opt", f"path={log_path}"])
     command.extend(service.podman_args)
 
     for key in sorted(service.env):
