@@ -13,8 +13,8 @@ health_path = "/v1/models"
 command = ["/bin/bash", "/mux-config/launch-llama-server.sh"]
 
 [[services.main.volumes]]
-source = "~/models"
-target = "/models"
+source = "/home/poop/models/hf/hub/models--HauhauCS--Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive/snapshots/f12a584fecbeb5f20001130d8ecd66c9327ae685/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q3_K_P.gguf"
+target = "/mux-models/hauhau.gguf"
 mode = "ro"
 
 [[services.main.volumes]]

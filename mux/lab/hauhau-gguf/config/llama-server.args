@@ -15,7 +15,7 @@
 on
 --metrics
 --model
-/models/active-gguf/hauhau.gguf
+/mux-models/hauhau.gguf
 --alias
 hauhau
 --cache-type-k

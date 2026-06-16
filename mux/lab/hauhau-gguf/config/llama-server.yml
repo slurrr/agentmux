@@ -8,7 +8,7 @@ server:
   cont-batching: true
   flash-attn: true
   metrics: true
-  model: /models/active-gguf/hauhau.gguf
+  model: /mux-models/hauhau.gguf
   alias: hauhau
   cache-type-k: q4_0
   cache-type-v: q4_0

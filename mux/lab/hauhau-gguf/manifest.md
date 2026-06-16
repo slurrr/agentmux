@@ -12,7 +12,7 @@ AgentMux is the stable serving cockpit. `workspace-gguf` remains the source/prov
 - Host port: `8002`
 - Container port: `5000`
 - Runtime: `~/runs/agentmux/hauhau-gguf/main -> /runs` (added by AgentMux)
-- Models: `~/models -> /models:ro`
+- Model file: source GGUF is mounted directly to `/mux-models/hauhau.gguf:ro`
 - Config: `./config -> /mux-config:ro`
 
 ## Source
@@ -48,7 +48,7 @@ server:
   cont-batching: true
   flash-attn: true
   metrics: true
-  model: /models/active-gguf/hauhau.gguf
+  model: /mux-models/hauhau.gguf
   alias: hauhau
   cache-type-k: q4_0
   cache-type-v: q4_0
@@ -95,7 +95,7 @@ metadata:
 on
 --metrics
 --model
-/models/active-gguf/hauhau.gguf
+/mux-models/hauhau.gguf
 --alias
 hauhau
 --cache-type-k
@@ -170,6 +170,7 @@ none
 - Chat template/tokenizer metadata is read from the GGUF unless the lab config is edited otherwise.
 - Files under `config/` are lab-editable. Meaningful tweaks should be backported to `workspace-gguf` before AgentMux core promotion.
 - AgentMux owns `/runs`; this export intentionally does not mount runtime data.
+- AgentMux does not rely on the workspace `active-gguf` symlink for this mux. The resolved GGUF is mounted directly to `/mux-models/hauhau.gguf`, so launching this mux cannot accidentally serve whatever model is currently active in the workspace.
 
 ## Recommended agent/harness use
 
