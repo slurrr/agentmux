@@ -1,0 +1,35 @@
+server:
+  host: 0.0.0.0
+  port: 5000
+  ctx-size: 262144
+  n-gpu-layers: -1
+  threads: 8
+  parallel: 8
+  cont-batching: true
+  flash-attn: true
+  metrics: true
+  fit: false
+  cache-type-k: q8_0
+  cache-type-v: q8_0
+  kv-unified: true
+  skip-chat-parsing: true
+  model: /models/active-gguf/hauhau-agent.gguf
+  alias: hauhau-agent
+sampling:
+  temperature: 1.0
+  top-p: 0.949999988079071
+  top-k: 20
+runtime:
+  image: localhost/llm-gguf:latest
+  container_name: llama-server
+metadata:
+  architecture: qwen35moe
+  source_gguf: /home/poop/models/hf/hub/models--HauhauCS--Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive/snapshots/f12a584fecbeb5f20001130d8ecd66c9327ae685/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q3_K_P.gguf
+  weights_gb: 17.717
+  sampling_provenance:
+    source: gguf_metadata
+    origin: /home/poop/models/hf/hub/models--HauhauCS--Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive/snapshots/f12a584fecbeb5f20001130d8ecd66c9327ae685/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q3_K_P.gguf
+    extracted_keys:
+      - general.sampling.temp
+      - general.sampling.top_p
+      - general.sampling.top_k

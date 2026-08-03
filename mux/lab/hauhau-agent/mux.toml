@@ -1,0 +1,23 @@
+[mux]
+name = "hauhau-agent-gguf"
+primary_service = "main"
+notes = "Lab-editable AgentMux export for proven hauhau-agent GGUF llama.cpp serving preset from workspace-gguf."
+
+[services.main]
+image = "localhost/llm-gguf:latest"
+container_name = "agentmux-hauhau-agent-gguf-main"
+port = 8002
+container_port = 5000
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+health_path = "/v1/models"
+command = ["/bin/bash", "/mux-config/launch-llama-server.sh"]
+
+[[services.main.volumes]]
+source = "~/models"
+target = "/models"
+mode = "ro"
+
+[[services.main.volumes]]
+source = "./config"
+target = "/mux-config"
+mode = "ro"

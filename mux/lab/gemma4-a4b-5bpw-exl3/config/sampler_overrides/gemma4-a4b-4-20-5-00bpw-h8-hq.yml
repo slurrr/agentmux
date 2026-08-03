@@ -1,0 +1,15 @@
+temperature:
+  override: 1.0
+  force: false
+top_p:
+  override: 0.95
+  force: false
+top_k:
+  override: 64
+  force: false
+stop:
+  override:
+  - <eos>
+  - <turn|>
+  force: false
+  additive: false

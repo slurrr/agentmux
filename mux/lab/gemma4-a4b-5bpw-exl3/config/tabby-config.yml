@@ -1,0 +1,38 @@
+draft_model:
+  draft_mode: ngram
+  draft_num_tokens: 4
+  ngram_match_min: 2
+logging:
+  log_generation_params: false
+  log_prompt: false
+  log_requests: false
+memory:
+  cuda_malloc_async: true
+  sysmem_recurrent_cache: 4096
+model:
+  autosplit_reserve:
+  - 96
+  backend: exllamav3
+  cache_mode: 4,4
+  cache_size: 262144
+  chunk_size: 4096
+  force_enable_thinking: true
+  gpu_split_auto: true
+  max_batch_size: 10
+  max_seq_len: 262144
+  model_dir: /models/active-exl3
+  model_name: gemma4-a4b-4-20-5-00bpw-h8-hq
+  output_chunking: true
+  reasoning: true
+  reasoning_end_token: <channel|>
+  reasoning_start_token: <|channel>
+  reasoning_suppress_header: thought
+  tool_format: gemma4
+network:
+  api_servers:
+  - OAI
+  disable_auth: true
+  host: 0.0.0.0
+  port: 5000
+sampling:
+  override_preset: gemma4-a4b-4-20-5-00bpw-h8-hq
