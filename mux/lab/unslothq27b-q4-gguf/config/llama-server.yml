@@ -1,7 +1,7 @@
 server:
   host: 0.0.0.0
   port: 5000
-  ctx-size: 262144
+  ctx-size: 196608
   n-gpu-layers: -1
   threads: 8
   parallel: 2
@@ -11,8 +11,13 @@ server:
   fit: false
   cache-type-k: q4_0
   cache-type-v: q4_0
-  cache-reuse: 256
+  cache-ram: 24576
+  ctx-checkpoints: 8
+  cache-idle-slots: true
   kv-unified: true
+  skip-chat-parsing: false
+  spec-type: draft-mtp
+  spec-draft-n-max: 3
   log-verbosity: 4
   model: /models/active-gguf/unslothq27b-q4.gguf
   alias: unslothq27b-q4
@@ -32,7 +37,7 @@ metadata:
     source: gguf_metadata
     origin: /home/poop/models/hf/hub/models--unsloth--Qwen3.6-27B-MTP-GGUF/snapshots/5cb35eb3dcbf52dbce5f87dbc64df6aaffadcace/Qwen3.6-27B-UD-Q4_K_XL.gguf
     extracted_keys:
-    - general.sampling.temp
-    - general.sampling.top_p
-    - general.sampling.top_k
+      - general.sampling.temp
+      - general.sampling.top_p
+      - general.sampling.top_k
     fallback_used: false

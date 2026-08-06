@@ -16,9 +16,9 @@ server:
   model: /models/active-gguf/hauhau-agent.gguf
   alias: hauhau-agent
 sampling:
-  temperature: 1.0
+  temperature: 0.8
   top-p: 0.949999988079071
-  top-k: 20
+  top-k: 33
 runtime:
   image: localhost/llm-gguf:latest
   container_name: llama-server
