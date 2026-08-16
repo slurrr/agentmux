@@ -1,0 +1,28 @@
+[mux]
+name = "qw3.8-awq"
+primary_service = "main"
+notes = "Lab-editable AgentMux export for proven philbert440--qwen3.8-27b-w4a16-awq vLLM serving preset from workspace-vllm."
+
+[services.main]
+image = "localhost/llm-vllm:latest"
+container_name = "agentmux-qw3.8-awq-main"
+port = 8002
+container_port = 5000
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+health_path = "/v1/models"
+command = ["/bin/bash", "/mux-config/launch-vllm.sh"]
+
+[services.main.env]
+VLLM_MODEL_PATH = "/models/hf/hub/models--philbert440--Qwen3.8-27B-W4A16-AWQ/snapshots/61078f74d2302c92ada2a71b57199a0021fba809"
+PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS = "0"
+
+[[services.main.volumes]]
+source = "~/models"
+target = "/models"
+mode = "ro"
+
+[[services.main.volumes]]
+source = "./config"
+target = "/mux-config"
+mode = "ro"

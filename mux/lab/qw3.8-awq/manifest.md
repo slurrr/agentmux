@@ -1,0 +1,263 @@
+# qw3.8-awq
+
+Lab-editable AgentMux export for the proven `philbert440--qwen3.8-27b-w4a16-awq` vLLM serving preset.
+
+AgentMux is the stable serving cockpit. `workspace-vllm` remains the source/proving ground. This export lets AgentMux launch the same already-built backend image and copied config while allowing lab tweaks before promotion.
+
+## Launch identity
+
+- Mux: `qw3.8-awq`
+- Service: `main`
+- Container: `agentmux-qw3.8-awq-main`
+- Host port: `8002`
+- Container port: `5000`
+- Runtime: `~/runs/agentmux/qw3.8-awq/main -> /runs` (added by AgentMux)
+- Models: `~/models -> /models:ro`
+- Config: `./config -> /mux-config:ro`
+
+## Source
+
+- Workspace: `/home/poop/code/dev/workspace-vllm`
+- Preset name: `philbert440/Qwen3.8-27B-W4A16-AWQ`
+- Backend: `vLLM`
+- Image: `localhost/llm-vllm:latest`
+- Model identifier/path: `philbert440/Qwen3.8-27B-W4A16-AWQ`
+- Served model name: `philbert440--qwen3.8-27b-w4a16-awq`
+- Export timestamp: `2026-08-15T18:53:38-06:00`
+
+## Exported files
+
+- `mux.toml` — AgentMux launch recipe.
+- `config/vllm-config.yml` — lab-editable copied serving config.
+- `config/launch-vllm.sh` — converts the simple copied YAML into vLLM args.
+- `config/vllm-args.txt` — static args snapshot for review.
+
+## Complete serving config
+
+```yaml
+server:
+  host: 0.0.0.0
+  port: 5000
+  gpu-memory-utilization: 0.9
+  max-model-len: 180224
+  kv-cache-memory: 4689529856
+  tensor-parallel-size: 1
+  max-num-batched-tokens: 2048
+  max-num-seqs: 32
+  compilation-config: '{"cudagraph_capture_sizes":[1,2,4,8,16,32]}'
+  kv-cache-dtype: int4_per_token_head
+  enable-prefix-caching: true
+  enforce-eager: true
+  limit-mm-per-prompt: '{"image":0,"video":0}'
+  speculative-config: '{"method":"mtp","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}'
+  trust-remote-code: false
+  enable-auto-tool-choice: true
+  tool-call-parser: qwen3_xml
+  reasoning-parser: qwen3
+sampling:
+  temperature: 1.0
+  top-p: 0.95
+  top-k: 20
+  stop:
+  - <|im_end|>
+model_features:
+  architecture: Qwen3_5ForConditionalGeneration
+  tool_format: qwen3_5
+  reasoning:
+    enabled: true
+    start_token: <think>
+    end_token: </think>
+    suppress_header: null
+  stop_tokens:
+  - <|im_end|>
+  chat_template: "{%- set image_count = namespace(value=0) %}\n{%- set video_count\
+    \ = namespace(value=0) %}\n{%- macro render_content(content, do_vision_count,\
+    \ is_system_content=false) %}\n    {%- if content is string %}\n        {{- content\
+    \ }}\n    {%- elif content is iterable and content is not mapping %}\n       \
+    \ {%- for item in content %}\n            {%- if 'image' in item or 'image_url'\
+    \ in item or item.type == 'image' %}\n                {%- if is_system_content\
+    \ %}\n                    {{- raise_exception('System message cannot contain images.')\
+    \ }}\n                {%- endif %}\n                {%- if do_vision_count %}\n\
+    \                    {%- set image_count.value = image_count.value + 1 %}\n  \
+    \              {%- endif %}\n                {%- if add_vision_id %}\n       \
+    \             {{- 'Picture ' ~ image_count.value ~ ': ' }}\n                {%-\
+    \ endif %}\n                {{- '<|vision_start|><|image_pad|><|vision_end|>'\
+    \ }}\n            {%- elif 'video' in item or item.type == 'video' %}\n      \
+    \          {%- if is_system_content %}\n                    {{- raise_exception('System\
+    \ message cannot contain videos.') }}\n                {%- endif %}\n        \
+    \        {%- if do_vision_count %}\n                    {%- set video_count.value\
+    \ = video_count.value + 1 %}\n                {%- endif %}\n                {%-\
+    \ if add_vision_id %}\n                    {{- 'Video ' ~ video_count.value ~\
+    \ ': ' }}\n                {%- endif %}\n                {{- '<|vision_start|><|video_pad|><|vision_end|>'\
+    \ }}\n            {%- elif 'text' in item %}\n                {{- item.text }}\n\
+    \            {%- else %}\n                {{- raise_exception('Unexpected item\
+    \ type in content.') }}\n            {%- endif %}\n        {%- endfor %}\n   \
+    \ {%- elif content is none or content is undefined %}\n        {{- '' }}\n   \
+    \ {%- else %}\n        {{- raise_exception('Unexpected content type.') }}\n  \
+    \  {%- endif %}\n{%- endmacro %}\n{%- if not messages %}\n    {{- raise_exception('No\
+    \ messages provided.') }}\n{%- endif %}\n{%- set reasoning_instructions = '' %}\n\
+    {%- if enable_thinking is undefined or enable_thinking is true %}\n    {%- set\
+    \ resolved_reasoning_effort = reasoning_effort|default('xhigh') %}\n    {%- if\
+    \ resolved_reasoning_effort not in ('xhigh', 'medium', 'low') %}\n        {{-\
+    \ raise_exception('Unexpected reasoning effort ' ~ reasoning_effort ~ '. Supported\
+    \ types are xhigh (default), medium, and low.') }}\n    {%- endif %}\n    {%-\
+    \ if resolved_reasoning_effort == 'xhigh' %}\n        {%- set reasoning_instructions\
+    \ = 'Reasoning effort is set to xhigh. Please think carefully through the task,\
+    \ validate key assumptions, consider plausible alternatives, and prioritize correctness,\
+    \ consistency, and clarity in the final answer.' %}\n    {%- elif resolved_reasoning_effort\
+    \ == 'low' %}\n        {%- set reasoning_instructions = 'Reasoning effort is set\
+    \ to low. Keep your thinking brief and focused, moving directly to the conclusion\
+    \ without unnecessary elaboration.' %}\n    {%- endif %}\n{%- endif %}\n{%- if\
+    \ tools and tools is iterable and tools is not mapping %}\n    {{- '<|im_start|>system\\\
+    n' }}\n    {%- if reasoning_instructions %}\n        {{- reasoning_instructions\
+    \ + '\\n\\n' }}\n    {%- endif %}\n    {{- \"# Tools\\n\\nYou have access to the\
+    \ following functions:\\n\\n<tools>\" }}\n    {%- for tool in tools %}\n     \
+    \   {{- \"\\n\" }}\n        {{- tool | tojson }}\n    {%- endfor %}\n    {{- \"\
+    \\n</tools>\" }}\n    {{- '\\n\\nIf you choose to call a function ONLY reply in\
+    \ the following format with NO suffix:\\n\\n<tool_call>\\n<function=example_function_name>\\\
+    n<parameter=example_parameter_1>\\nvalue_1\\n</parameter>\\n<parameter=example_parameter_2>\\\
+    nThis is the value for the second parameter\\nthat can span\\nmultiple lines\\\
+    n</parameter>\\n</function>\\n</tool_call>\\n\\n<IMPORTANT>\\nReminder:\\n- Function\
+    \ calls MUST follow the specified format: an inner <function=...></function> block\
+    \ must be nested within <tool_call></tool_call> XML tags\\n- Required parameters\
+    \ MUST be specified\\n- You may provide optional reasoning for your function call\
+    \ in natural language BEFORE the function call, but NOT after\\n- If there is\
+    \ no function call available, answer the question like normal with your current\
+    \ knowledge and do not tell the user about function calls\\n</IMPORTANT>' }}\n\
+    \    {%- if messages[0].role == 'system' %}\n        {%- set content = render_content(messages[0].content,\
+    \ false, true)|trim %}\n        {%- if content %}\n            {{- '\\n\\n' +\
+    \ content }}\n        {%- endif %}\n    {%- endif %}\n    {{- '<|im_end|>\\n'\
+    \ }}\n{%- else %}\n    {%- if messages[0].role == 'system' %}\n        {%- set\
+    \ content = render_content(messages[0].content, false, true)|trim %}\n       \
+    \ {%- if content %}\n            {{- '<|im_start|>system\\n' + (reasoning_instructions\
+    \ + '\\n\\n' if reasoning_instructions else '')  + content + '<|im_end|>\\n' }}\n\
+    \        {%- elif reasoning_instructions %}\n            {{- '<|im_start|>system\\\
+    n' + reasoning_instructions + '<|im_end|>\\n' }}\n        {%- endif %}\n    {%-\
+    \ elif reasoning_instructions %}\n        {{- '<|im_start|>system\\n' + reasoning_instructions\
+    \ + '<|im_end|>\\n' }}\n    {%- endif %}\n{%- endif %}\n{%- set ns = namespace(multi_step_tool=true,\
+    \ last_query_index=messages|length - 1) %}\n{%- for message in messages[::-1]\
+    \ %}\n    {%- set index = (messages|length - 1) - loop.index0 %}\n    {%- if ns.multi_step_tool\
+    \ and message.role == \"user\" %}\n        {%- set content = render_content(message.content,\
+    \ false)|trim %}\n        {%- if not(content.startswith('<tool_response>') and\
+    \ content.endswith('</tool_response>')) %}\n            {%- set ns.multi_step_tool\
+    \ = false %}\n            {%- set ns.last_query_index = index %}\n        {%-\
+    \ endif %}\n    {%- endif %}\n{%- endfor %}\n{%- if ns.multi_step_tool %}\n  \
+    \  {{- raise_exception('No user query found in messages.') }}\n{%- endif %}\n\
+    {%- for message in messages %}\n    {%- set content = render_content(message.content,\
+    \ true)|trim %}\n    {%- if message.role == \"system\" %}\n        {%- if not\
+    \ loop.first %}\n            {{- raise_exception('System message must be at the\
+    \ beginning.') }}\n        {%- endif %}\n    {%- elif message.role == \"user\"\
+    \ %}\n        {{- '<|im_start|>' + message.role + '\\n' + content + '<|im_end|>'\
+    \ + '\\n' }}\n    {%- elif message.role == \"assistant\" %}\n        {%- set reasoning_content\
+    \ = '' %}\n        {%- if message.reasoning_content is string %}\n           \
+    \ {%- set reasoning_content = message.reasoning_content %}\n        {%- endif\
+    \ %}\n        {%- set reasoning_content = reasoning_content|trim %}\n        {%-\
+    \ if preserve_thinking is undefined or preserve_thinking is true or loop.index0\
+    \ > ns.last_query_index %}\n            {{- '<|im_start|>' + message.role + '\\\
+    n<think>\\n' + reasoning_content + '\\n</think>\\n\\n' + content }}\n        {%-\
+    \ else %}\n            {{- '<|im_start|>' + message.role + '\\n' + content }}\n\
+    \        {%- endif %}\n        {%- if message.tool_calls and message.tool_calls\
+    \ is iterable and message.tool_calls is not mapping %}\n            {%- for tool_call\
+    \ in message.tool_calls %}\n                {%- if tool_call.function is defined\
+    \ %}\n                    {%- set tool_call = tool_call.function %}\n        \
+    \        {%- endif %}\n                {%- if loop.first %}\n                \
+    \    {%- if content|trim %}\n                        {{- '\\n\\n<tool_call>\\\
+    n<function=' + tool_call.name + '>\\n' }}\n                    {%- else %}\n \
+    \                       {{- '<tool_call>\\n<function=' + tool_call.name + '>\\\
+    n' }}\n                    {%- endif %}\n                {%- else %}\n       \
+    \             {{- '\\n<tool_call>\\n<function=' + tool_call.name + '>\\n' }}\n\
+    \                {%- endif %}\n                {%- if tool_call.arguments is defined\
+    \ and tool_call.arguments != '' %}\n                    {%- for args_name, args_value\
+    \ in tool_call.arguments|items %}\n                        {{- '<parameter=' +\
+    \ args_name + '>\\n' }}\n                        {%- set args_value = args_value\
+    \ | string if args_value is string else args_value | tojson | safe %}\n      \
+    \                  {{- args_value }}\n                        {{- '\\n</parameter>\\\
+    n' }}\n                    {%- endfor %}\n                {%- endif %}\n     \
+    \           {{- '</function>\\n</tool_call>' }}\n            {%- endfor %}\n \
+    \       {%- endif %}\n        {{- '<|im_end|>\\n' }}\n    {%- elif message.role\
+    \ == \"tool\" %}\n        {%- if loop.previtem and loop.previtem.role != \"tool\"\
+    \ %}\n            {{- '<|im_start|>user' }}\n        {%- endif %}\n        {{-\
+    \ '\\n<tool_response>\\n' }}\n        {{- content }}\n        {{- '\\n</tool_response>'\
+    \ }}\n        {%- if not loop.last and loop.nextitem.role != \"tool\" %}\n   \
+    \         {{- '<|im_end|>\\n' }}\n        {%- elif loop.last %}\n            {{-\
+    \ '<|im_end|>\\n' }}\n        {%- endif %}\n    {%- else %}\n        {{- raise_exception('Unexpected\
+    \ message role.') }}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt\
+    \ %}\n    {{- '<|im_start|>assistant\\n' }}\n    {%- if enable_thinking is defined\
+    \ and enable_thinking is false %}\n        {{- '<think>\\n\\n</think>\\n\\n' }}\n\
+    \    {%- else %}\n        {{- '<think>\\n' }}\n    {%- endif %}\n{%- endif %}"
+model_identifier: philbert440/Qwen3.8-27B-W4A16-AWQ
+slug: philbert440--qwen3.8-27b-w4a16-awq
+```
+
+## vLLM args snapshot
+
+```text
+--host
+0.0.0.0
+--port
+5000
+--gpu-memory-utilization
+0.9
+--max-model-len
+180224
+--kv-cache-memory
+4689529856
+--tensor-parallel-size
+1
+--max-num-batched-tokens
+2048
+--max-num-seqs
+32
+--compilation-config
+{"cudagraph_capture_sizes":[1,2,4,8,16,32]}
+--kv-cache-dtype
+int4_per_token_head
+--enable-prefix-caching
+--enforce-eager
+--limit-mm-per-prompt
+{"image":0,"video":0}
+--speculative-config
+{"method":"mtp","num_speculative_tokens":3,"draft_sample_method":"probabilistic"}
+--enable-auto-tool-choice
+--tool-call-parser
+qwen3_xml
+--reasoning-parser
+qwen3
+```
+
+## Notes / caveats
+
+```text
+- [2026-08-14] Onboarded philbert440/Qwen3.8-27B-W4A16-AWQ (Qwen3_5ForConditionalGeneration).
+- Native context length: 262144 tokens.
+- Selected server config: max-model-len=32768, gpu-memory-utilization=0.9, tensor-parallel-size=1, kv-cache-dtype=int4_per_token_head, enforce-eager=True.
+- Runtime/cache plan: confidence=medium, rules_used=['backend_paged_attention_planning', 'explicit_head_dim', 'hf_config', 'layer_types', 'quantization_metadata'].
+- Tool format: qwen3_5.
+- Reasoning: enabled <think> ... </think>.
+- Sampling source: generation_config.
+- Model weights on disk: ~18.21 GB.
+- Model shape: 64 layers, 24 heads, 4 KV heads.
+
+- Estimated VRAM requirements (weights: ~18.21 GB):
+  * 4k context: ~18.46 GB estimated total VRAM (fits current budget)
+  * 8k context: ~18.71 GB estimated total VRAM (fits current budget)
+  * 16k context: ~19.21 GB estimated total VRAM (fits current budget)
+  * 32k context: ~20.21 GB estimated total VRAM (fits current budget)
+
+- Note: vLLM uses paged attention/runtime memory planning; estimates are rough lower bounds.
+- trust-remote-code enabled: non-standard architecture (transformers probe unavailable).
+- Tool choice: enabled (auto), format=qwen3_5, parser=qwen3_xml.
+- Reasoning parser: qwen3.
+- Model-card serving recommendations read from README.md: {'max_model_len': 32768, 'reasoning_parser': 'qwen3'}.
+```
+
+- Chat template/tokenizer metadata is read from the model directory unless the lab config is edited otherwise.
+- Files under `config/` are lab-editable. Meaningful tweaks should be backported to `workspace-vllm` before AgentMux core promotion.
+- AgentMux owns `/runs`; this export intentionally does not mount runtime data.
+
+## Recommended agent/harness use
+
+```text
+base_url: http://127.0.0.1:8002/v1
+model: philbert440--qwen3.8-27b-w4a16-awq
+```

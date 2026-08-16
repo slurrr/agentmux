@@ -47,7 +47,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not wait for health endpoints",
     )
-    up_parser.add_argument("--timeout", type=float, default=120.0, help="Readiness timeout seconds")
+    up_parser.add_argument(
+        "--timeout", type=float, default=300.0, help="Readiness timeout seconds (default: 300)"
+    )
 
     down_parser = subparsers.add_parser("down", help="Remove active mux containers")
     down_parser.add_argument("mux", nargs="?", help="Optional mux name guard")
