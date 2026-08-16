@@ -23,7 +23,7 @@ AgentMux is the stable serving cockpit. `workspace-vllm` remains the source/prov
 - Image: `localhost/llm-vllm:latest`
 - Model identifier/path: `philbert440/Qwen3.8-27B-W4A16-AWQ`
 - Served model name: `philbert440--qwen3.8-27b-w4a16-awq`
-- Export timestamp: `2026-08-15T18:53:38-06:00`
+- Export timestamp: `2026-08-15T19:50:08-06:00`
 
 ## Exported files
 
@@ -54,6 +54,7 @@ server:
   enable-auto-tool-choice: true
   tool-call-parser: qwen3_xml
   reasoning-parser: qwen3
+  served-model-name: qw3.8-awq
 sampling:
   temperature: 1.0
   top-p: 0.95
@@ -223,6 +224,8 @@ int4_per_token_head
 qwen3_xml
 --reasoning-parser
 qwen3
+--served-model-name
+qw3.8-awq
 ```
 
 ## Notes / caveats

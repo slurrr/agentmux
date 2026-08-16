@@ -17,6 +17,7 @@ server:
   enable-auto-tool-choice: true
   tool-call-parser: qwen3_xml
   reasoning-parser: qwen3
+  served-model-name: qw3.8-awq
 sampling:
   temperature: 1.0
   top-p: 0.95

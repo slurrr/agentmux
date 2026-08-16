@@ -29,3 +29,5 @@ int4_per_token_head
 qwen3_xml
 --reasoning-parser
 qwen3
+--served-model-name
+qw3.8-awq
