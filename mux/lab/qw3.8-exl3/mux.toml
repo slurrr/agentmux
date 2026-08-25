@@ -1,11 +1,11 @@
 [mux]
-name = "gemma4-a4b-5bpw-exl3"
+name = "qw3.8-exl3"
 primary_service = "main"
-notes = "Lab-editable AgentMux export for proven gemma4-a4b-4-20-5-00bpw-h8-hq EXL3/TabbyAPI serving preset from workspace-exl3."
+notes = "Lab-editable AgentMux export for proven qw3.8-3.67-direct EXL3/TabbyAPI serving preset from workspace-exl3."
 
 [services.main]
-image = "localhost/llm-tabby:latest"
-container_name = "agentmux-gemma4-a4b-5bpw-exl3-main"
+image = "localhost/llm-tabby:exllamav3-1.4.2-cu132-tabby-e632af4-cuda13.2.1"
+container_name = "agentmux-qw3.8-exl3-main"
 port = 8002
 container_port = 5000
 podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
@@ -13,10 +13,13 @@ health_path = "/v1/models"
 
 [services.main.env]
 EXLLAMAV3_TUNE_CACHE = "/runs/exllamav3-autotune/coop_autotune_v1.bin"
+EXL3_QC_STAGING = "0"
+EXL3_BC_ATTN = "1"
+EXL3_BC_ATTN_TRACE = "0"
 
 [[services.main.volumes]]
-source = "/home/poop/models/local/exl3/gemma4-a4b-4.20-5.00bpw-h8-hq"
-target = "/models/gemma4-a4b-4-20-5-00bpw-h8-hq"
+source = "/home/poop/models/local/exl3/qw3.8-3.67-direct"
+target = "/models/qw3.8-3.67-direct"
 mode = "ro"
 
 [[services.main.volumes]]

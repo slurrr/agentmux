@@ -12,7 +12,7 @@ AgentMux is the stable serving cockpit. `workspace-exl3` remains the source/prov
 - Host port: `8002`
 - Container port: `5000`
 - Runtime: `~/runs/agentmux/gemma4-a4b-5bpw-exl3/main -> /runs` (added by AgentMux)
-- Model artifact: `/home/poop/models/local/exl3/gemma4-a4b-4.20-cook/candidates/gemma4-a4b-4.20-5.00bpw-h8-hq -> /models/gemma4-a4b-4-20-5-00bpw-h8-hq:ro`
+- Model artifact: `/home/poop/models/local/exl3/gemma4-a4b-4.20-5.00bpw-h8-hq -> /models/gemma4-a4b-4-20-5-00bpw-h8-hq:ro`
 
 ## Source
 
@@ -21,8 +21,8 @@ AgentMux is the stable serving cockpit. `workspace-exl3` remains the source/prov
 - Backend: `TabbyAPI` / `ExLlamaV3`
 - Image: `localhost/llm-tabby:latest`
 - Image info at export: `localhost/llm-tabby:latest 2be188a68788 5 weeks ago`
-- Model identifier/path: `/home/poop/models/local/exl3/gemma4-a4b-4.20-cook/candidates/gemma4-a4b-4.20-5.00bpw-h8-hq`
-- Direct artifact bind source: `/home/poop/models/local/exl3/gemma4-a4b-4.20-cook/candidates/gemma4-a4b-4.20-5.00bpw-h8-hq`
+- Model identifier/path: `/home/poop/models/local/exl3/gemma4-a4b-4.20-5.00bpw-h8-hq`
+- Direct artifact bind source: `/home/poop/models/local/exl3/gemma4-a4b-4.20-5.00bpw-h8-hq`
 - Served model name: `gemma4-a4b-4-20-5-00bpw-h8-hq`
 - Export timestamp: `2026-07-18T14:38:20-06:00`
 

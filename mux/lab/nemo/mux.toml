@@ -1,0 +1,28 @@
+[mux]
+name = "nemo"
+primary_service = "main"
+notes = "Lab-editable AgentMux export for proven nvidia--nvidia-nemotron-3.5-lightning-30b-a3b-nvfp4 vLLM serving preset from workspace-vllm."
+
+[services.main]
+image = "localhost/llm-vllm:latest"
+container_name = "agentmux-nemo-main"
+port = 8002
+container_port = 5000
+podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+health_path = "/v1/models"
+command = ["/bin/bash", "/mux-config/launch-vllm.sh"]
+
+[services.main.env]
+VLLM_MODEL_PATH = "/models/hf/hub/models--nvidia--NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4/snapshots/e8f3c7c4de75ad84fe1bcef95d38eca76214480b"
+PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS = "0"
+
+[[services.main.volumes]]
+source = "~/models"
+target = "/models"
+mode = "ro"
+
+[[services.main.volumes]]
+source = "./config"
+target = "/mux-config"
+mode = "ro"
