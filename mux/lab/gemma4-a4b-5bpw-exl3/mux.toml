@@ -4,7 +4,7 @@ primary_service = "main"
 notes = "Lab-editable AgentMux export for proven gemma4-a4b-4-20-5-00bpw-h8-hq EXL3/TabbyAPI serving preset from workspace-exl3."
 
 [services.main]
-image = "localhost/llm-tabby:latest"
+image = "localhost/llm-tabby:exllamav3-1.4.4-cu132-tabby-fcc1a107-cuda13.2.1"
 container_name = "agentmux-gemma4-a4b-5bpw-exl3-main"
 port = 8002
 container_port = 5000

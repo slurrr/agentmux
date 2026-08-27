@@ -72,6 +72,18 @@ must be explicit in `mux.toml` or baked into the proven image/launch shape by th
 5. Test in real agent workflows and update `manifest.md`.
 6. Promote directory to `mux/core` when stable.
 
+To prove an existing export against a new compatible image without rewriting
+its `mux.toml`, use the temporary image override. It preserves the exported
+volumes, environment, command, and health check:
+
+```bash
+agentmux render <mux-name> --image localhost/llm-tabby:<new-tag>
+agentmux up <mux-name> --image localhost/llm-tabby:<new-tag>
+```
+
+The override is runtime-only and is recorded in active runtime state; it does
+not change the mux manifest.
+
 ## Commands
 
 ```bash

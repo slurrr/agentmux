@@ -48,7 +48,7 @@ class MuxLaunchPlan:
     services: list[ServiceLaunchPlan]
 
 
-def _build_podman_run(service: ServiceSpec) -> list[str]:
+def _build_podman_run(service: ServiceSpec, *, image: str | None = None) -> list[str]:
     command = ["podman", "run", "--detach", "--replace", "--name", service.container_name]
     if service.runtime_dir:
         log_path = Path(service.runtime_dir) / "podman.log"
@@ -67,23 +67,28 @@ def _build_podman_run(service: ServiceSpec) -> list[str]:
     for volume in service.volumes:
         command.extend(["--volume", volume.podman_value()])
 
-    command.append(service.image)
+    command.append(image or service.image)
     command.extend(service.command)
     return command
 
 
-def build_mux_plan(mux_name: str, root: Path = MUX_ROOT) -> MuxLaunchPlan:
+def build_mux_plan(
+    mux_name: str,
+    root: Path = MUX_ROOT,
+    *,
+    image_override: str | None = None,
+) -> MuxLaunchPlan:
     mux = resolve_mux(mux_name, root=root)
     services = [
         ServiceLaunchPlan(
             mux=mux.name,
             service=service.name,
-            image=service.image,
+            image=image_override or service.image,
             container_name=service.container_name,
             host=service.host,
             port=service.port,
             health_path=service.health_path,
-            command=_build_podman_run(service),
+            command=_build_podman_run(service, image=image_override),
         )
         for service in mux.services.values()
     ]
@@ -113,6 +118,7 @@ def launch_mux(
     mux_name: str,
     root: Path = MUX_ROOT,
     *,
+    image_override: str | None = None,
     wait: bool = True,
     timeout_seconds: float = DEFAULT_STARTUP_TIMEOUT_SECONDS,
 ) -> RuntimeStack:
@@ -121,9 +127,10 @@ def launch_mux(
         container_is_running(service.container_name) for service in active.services
     )
     if active_running:
+        assert active is not None
         raise RuntimeError(f"Active mux already running: {active.mux}")
 
-    plan = build_mux_plan(mux_name, root=root)
+    plan = build_mux_plan(mux_name, root=root, image_override=image_override)
     runtime_services: list[RuntimeService] = []
 
     try:

@@ -7,6 +7,7 @@ import subprocess
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from agentmux import __version__
 from agentmux.config import MUX_ROOT, iter_muxes, resolve_mux
@@ -34,6 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
     render_parser = subparsers.add_parser("render", help="Render Podman launch commands")
     render_parser.add_argument("mux")
     render_parser.add_argument("--json", action="store_true")
+    render_parser.add_argument(
+        "--image",
+        help="Temporarily substitute the service image without editing mux.toml",
+    )
 
     up_parser = subparsers.add_parser("up", help="Launch a mux")
     up_parser.add_argument("mux")
@@ -49,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     up_parser.add_argument(
         "--timeout", type=float, default=300.0, help="Readiness timeout seconds (default: 300)"
+    )
+    up_parser.add_argument(
+        "--image",
+        help="Temporarily substitute the service image without editing mux.toml",
     )
 
     down_parser = subparsers.add_parser("down", help="Remove active mux containers")
@@ -72,11 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _service_payload(service: object) -> dict[str, object]:
+def _service_payload(service: Any) -> dict[str, Any]:
     return asdict(service)  # dataclass service specs stay intentionally flat
 
 
-def _mux_payload(name: str, root: Path) -> dict[str, object]:
+def _mux_payload(name: str, root: Path) -> dict[str, Any]:
     mux = resolve_mux(name, root=root)
     return {
         "name": mux.name,
@@ -144,8 +153,13 @@ def _print_show(name: str, root: Path, as_json: bool) -> int:
     return 0
 
 
-def _render_payload(name: str, root: Path) -> dict[str, object]:
-    plan = build_mux_plan(name, root=root)
+def _render_payload(
+    name: str,
+    root: Path,
+    *,
+    image_override: str | None = None,
+) -> dict[str, Any]:
+    plan = build_mux_plan(name, root=root, image_override=image_override)
     return {
         "mux": plan.mux.name,
         "track": plan.mux.track,
@@ -165,8 +179,13 @@ def _render_payload(name: str, root: Path) -> dict[str, object]:
     }
 
 
-def _print_render(name: str, root: Path, as_json: bool) -> int:
-    payload = _render_payload(name, root)
+def _print_render(
+    name: str,
+    root: Path,
+    as_json: bool,
+    image_override: str | None = None,
+) -> int:
+    payload = _render_payload(name, root, image_override=image_override)
     if as_json:
         print(json.dumps(payload, indent=2))
         return 0
@@ -204,10 +223,11 @@ def _print_status(as_json: bool) -> int:
 
 def _run_up(args: argparse.Namespace) -> int:
     if args.dry_run:
-        return _print_render(args.mux, args.root, as_json=False)
+        return _print_render(args.mux, args.root, as_json=False, image_override=args.image)
     runtime = launch_mux(
         args.mux,
         root=args.root,
+        image_override=args.image,
         wait=not args.no_wait,
         timeout_seconds=args.timeout,
     )
@@ -267,7 +287,7 @@ def run(argv: list[str] | None = None) -> int:
         if args.command == "show":
             return _print_show(args.mux, args.root, args.json)
         if args.command == "render":
-            return _print_render(args.mux, args.root, args.json)
+            return _print_render(args.mux, args.root, args.json, image_override=args.image)
         if args.command == "up":
             return _run_up(args)
         if args.command == "down":

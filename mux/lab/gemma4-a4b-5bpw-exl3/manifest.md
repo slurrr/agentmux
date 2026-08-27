@@ -19,8 +19,8 @@ AgentMux is the stable serving cockpit. `workspace-exl3` remains the source/prov
 - Workspace: `/home/poop/code/dev/workspace-exl3`
 - Preset name: `gemma4-a4b-4-20-5-00bpw-h8-hq`
 - Backend: `TabbyAPI` / `ExLlamaV3`
-- Image: `localhost/llm-tabby:latest`
-- Image info at export: `localhost/llm-tabby:latest 2be188a68788 5 weeks ago`
+- Image: `localhost/llm-tabby:exllamav3-1.4.4-cu132-tabby-fcc1a107-cuda13.2.1`
+- Image info after 1.4.4 upgrade: `localhost/llm-tabby:exllamav3-1.4.4-cu132-tabby-fcc1a107-cuda13.2.1 a2a1d0dc7f9a 2026-08-27`
 - Model identifier/path: `/home/poop/models/local/exl3/gemma4-a4b-4.20-5.00bpw-h8-hq`
 - Direct artifact bind source: `/home/poop/models/local/exl3/gemma4-a4b-4.20-5.00bpw-h8-hq`
 - Served model name: `gemma4-a4b-4-20-5-00bpw-h8-hq`

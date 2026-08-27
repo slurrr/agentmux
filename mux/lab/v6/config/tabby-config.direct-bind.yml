@@ -1,0 +1,38 @@
+draft_model:
+  draft_cache_mode: Q4
+  draft_mode: mtp
+  draft_num_tokens: 2
+logging:
+  log_generation_params: false
+  log_prompt: false
+  log_requests: false
+memory:
+  cuda_malloc_async: true
+  sysmem_kv_cache: 4096
+  sysmem_recurrent_cache: 4096
+model:
+  autosplit_reserve:
+  - 96
+  backend: exllamav3
+  cache_mode: 8,6
+  cache_size: 262144
+  chunk_size: 2048
+  force_enable_thinking: true
+  gpu_split_auto: true
+  max_batch_size: 4
+  max_seq_len: 262144
+  model_dir: /models
+  model_name: v6
+  output_chunking: true
+  reasoning: true
+  reasoning_end_token: </think>
+  reasoning_start_token: <think>
+  tool_format: qwen3_5
+network:
+  api_servers:
+  - OAI
+  disable_auth: true
+  host: 0.0.0.0
+  port: 5000
+sampling:
+  override_preset: v6
