@@ -84,6 +84,13 @@ agentmux up <mux-name> --image localhost/llm-tabby:<new-tag>
 The override is runtime-only and is recorded in active runtime state; it does
 not change the mux manifest.
 
+## Local command surface
+
+The repository also contains `bin/agentmux`, a checkout-local wrapper that
+runs the source package directly and points it at this checkout's `mux/` root.
+The user-facing command is exposed from `~/.local/bin/agentmux` as a symlink to
+that file; it is not a second implementation.
+
 ## Commands
 
 ```bash

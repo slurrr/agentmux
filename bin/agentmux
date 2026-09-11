@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="${AGENTMUX_REPO:-$HOME/code/dev/agentmux}"
+SRC="$REPO/src"
+ROOT="${AGENTMUX_ROOT:-$REPO/mux}"
+
+if [[ ! -d "$SRC/agentmux" ]]; then
+  echo "agentmux wrapper: missing source package at $SRC/agentmux" >&2
+  exit 1
+fi
+
+if [[ ! -d "$ROOT" ]]; then
+  echo "agentmux wrapper: missing mux root at $ROOT" >&2
+  exit 1
+fi
+
+# AgentMux has no runtime dependencies beyond the Python standard library.
+# Do not create or activate a venv here; backend workspaces own backend envs.
+exec python3 -I -c 'import sys, runpy; src = sys.argv[1]; sys.path.insert(0, src); sys.argv = ["agentmux", "--root", sys.argv[2], *sys.argv[3:]]; runpy.run_module("agentmux.main", run_name="__main__")' "$SRC" "$ROOT" "$@"
