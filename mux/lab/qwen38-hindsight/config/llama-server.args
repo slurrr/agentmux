@@ -30,7 +30,7 @@ none
 --ubatch-size
 512
 --cache-ram
-24576
+8192
 --cache-idle-slots
 --spec-type
 draft-mtp

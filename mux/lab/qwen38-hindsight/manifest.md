@@ -24,7 +24,7 @@ AgentMux is the stable serving cockpit. `workspace-gguf` remains the source/prov
 - Image info at export: `localhost/llm-gguf:qwen38-hauhau-fastmtp-4df29be 631d5376555c 2 weeks ago`
 - Model identifier/path: `/models/active-gguf/qwen38-hindsight.gguf`
 - Served model name: `qwen38-hindsight`
-- Export timestamp: `2026-09-23T15:17:59-06:00`
+- Export timestamp: `2026-09-23T16:04:19-06:00`
 
 ## Exported files
 
@@ -56,7 +56,7 @@ server:
   kv-unified: true
   batch-size: 2048
   ubatch-size: 512
-  cache-ram: 24576
+  cache-ram: 8192
   cache-idle-slots: true
   spec-type: draft-mtp
   spec-draft-model: /models/hf/hub/models--HauhauCS--Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF/snapshots/993a5971fda8f30dd1b7eb2654792ba4415c7460/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-FastMTP-32K.gguf
@@ -128,7 +128,7 @@ none
 --ubatch-size
 512
 --cache-ram
-24576
+8192
 --cache-idle-slots
 --spec-type
 draft-mtp
@@ -165,13 +165,16 @@ qwen38-hindsight
 ```text
 - Hindsight concurrency profile for the Q3_K_P Qwen3.8 target with the HauhauCS FastMTP draft model.
 - Uses one shared 262144-token KV pool with 8 concurrent sequences: eight 32k retain calls fit within the pool.
-- Benchmark selection on the RTX 4090: parallel=8, kv-unified=true, target/draft q4_0 KV, batch-size=2048,
-  ubatch-size=512, and FastMTP n-max=1 with the draft fully on GPU. This consumed about 23092 MiB and served
-  eight concurrent 32k-token prompts successfully.
-- A six-slot profile with n-max=2 also fit and measured slightly higher aggregate prompt throughput, but cannot
-  absorb Hindsight's eight simultaneous retain calls. The ten-slot / ten-times-32k profile exceeded available GPU
-  memory during MTP context initialization, so eight is the concurrency ceiling for this model on this GPU.
-- Host prompt-cache space is 24576 MiB so idle slots can be ejected for consolidation and later restored.
+- Decode benchmark on the RTX 4090 used 3077-token prompts, 512 forced output tokens, and two rounds per case.
+  One slot with FastMTP n-max=2 reached 89.5-101.8 tok/s. At eight simultaneous requests, the selected
+  parallel=8 / n-max=1 profile reached 147-156 aggregate decode tok/s, with roughly 22-34 tok/s per request.
+- A six-slot n-max=3 profile reached 155-159 aggregate tok/s at six requests, but only 140-143 aggregate tok/s
+  when eight requests were submitted and two had to queue. The eight-slot profile is faster for Hindsight's
+  actual eight-retain burst and avoids queueing.
+- FastMTP n-max=2 on eight GPU slots did not fit; moving the draft to CPU reduced aggregate decode to 52-54 tok/s.
+  A ten-slot / ten-times-32k profile exceeded available GPU memory during MTP context initialization.
+- Host prompt-cache space is 8192 MiB so idle slots can be ejected for consolidation without allowing host cache
+  growth to compete with Hindsight's long-running process.
 - Runtime uses llama.cpp 4df29be4f4c3673f428170fda944a5b19f743bb8 plus the signed HauhauCS FastMTP patch.
 ```
 
