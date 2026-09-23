@@ -29,7 +29,7 @@ none
 --ubatch-size
 256
 --cache-ram
-0
+8192
 --spec-type
 draft-mtp
 --spec-draft-model

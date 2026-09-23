@@ -55,7 +55,7 @@ server:
   threads-batch: 8
   batch-size: 1024
   ubatch-size: 256
-  cache-ram: 0
+  cache-ram: 8192
   spec-type: draft-mtp
   spec-draft-model: /models/hf/hub/models--HauhauCS--Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF/snapshots/993a5971fda8f30dd1b7eb2654792ba4415c7460/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-FastMTP-32K.gguf
   spec-draft-ngl: -1
@@ -125,7 +125,7 @@ none
 --ubatch-size
 256
 --cache-ram
-0
+8192
 --spec-type
 draft-mtp
 --spec-draft-model
