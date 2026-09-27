@@ -4,6 +4,9 @@ import json
 import os
 import subprocess
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -135,13 +138,55 @@ def container_status(container_name: str) -> str:
     return result.stdout.strip() or "unknown"
 
 
+def _endpoint_probe(url: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "reachable": False,
+        "serving": False,
+        "http_status": None,
+        "models": [],
+    }
+    try:
+        with urllib.request.urlopen(url, timeout=1.5) as response:
+            status = int(response.status)
+            body = response.read(1024 * 1024)
+        result["http_status"] = status
+        result["reachable"] = 200 <= status < 400
+        if not result["reachable"]:
+            return result
+
+        path = urllib.parse.urlparse(url).path.rstrip("/")
+        if path.endswith("/v1/models"):
+            payload = json.loads(body)
+            entries = payload.get("data") or payload.get("models") or []
+            models = [
+                str(item.get("id") or item.get("name"))
+                for item in entries
+                if isinstance(item, dict) and (item.get("id") or item.get("name"))
+            ]
+            result["models"] = models
+            result["serving"] = bool(models)
+        else:
+            result["serving"] = True
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError):
+        pass
+    return result
+
+
 def runtime_status(runtime_stack: RuntimeStack | None) -> dict[str, Any]:
     if runtime_stack is None:
         return {"active": False, "mux": None, "services": []}
 
     services: list[dict[str, Any]] = []
     for service in runtime_stack.services:
-        running = container_is_running(service.container_name)
+        container_running = container_is_running(service.container_name)
+        endpoint = _endpoint_probe(service.health_url)
+        running = container_running and bool(endpoint["serving"])
+        if running:
+            status = "running"
+        elif container_running:
+            status = "unreachable"
+        else:
+            status = container_status(service.container_name)
         services.append(
             {
                 "name": service.name,
@@ -152,7 +197,12 @@ def runtime_status(runtime_stack: RuntimeStack | None) -> dict[str, Any]:
                 "port": service.port,
                 "health_url": service.health_url,
                 "running": running,
-                "status": "running" if running else container_status(service.container_name),
+                "container_running": container_running,
+                "endpoint_reachable": endpoint["reachable"],
+                "serving": endpoint["serving"],
+                "http_status": endpoint["http_status"],
+                "models": endpoint["models"],
+                "status": status,
                 "started_at": service.started_at,
             }
         )

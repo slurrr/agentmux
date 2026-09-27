@@ -211,13 +211,15 @@ def _print_status(as_json: bool) -> int:
     print(f"mux: {payload['mux']}")
     print(f"track: {payload['track']}")
     for service in payload["services"]:
-        state = "running" if service["running"] else service["status"]
         print(
-            f"  {service['name']}: {state} container={service['container_name']} "
+            f"  {service['name']}: {service['status']} container={service['container_name']} "
             f"port={service['port']} age={format_age(float(service['started_at']))}"
         )
         print(f"    image: {service['image']}")
-        print(f"    health: {service['health_url']}")
+        endpoint = "reachable" if service["endpoint_reachable"] else "unreachable"
+        print(f"    endpoint: {endpoint} {service['health_url']}")
+        if service["models"]:
+            print(f"    models: {', '.join(service['models'])}")
     return 0
 
 
