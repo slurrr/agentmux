@@ -144,9 +144,10 @@ def _endpoint_probe(url: str) -> dict[str, Any]:
         "serving": False,
         "http_status": None,
         "models": [],
+        "probe_error": None,
     }
     try:
-        with urllib.request.urlopen(url, timeout=1.5) as response:
+        with urllib.request.urlopen(url, timeout=10) as response:
             status = int(response.status)
             body = response.read(1024 * 1024)
         result["http_status"] = status
@@ -167,8 +168,12 @@ def _endpoint_probe(url: str) -> dict[str, Any]:
             result["serving"] = bool(models)
         else:
             result["serving"] = True
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError):
-        pass
+    except TimeoutError:
+        result["probe_error"] = "timeout"
+    except urllib.error.URLError as exc:
+        result["probe_error"] = "timeout" if isinstance(exc.reason, TimeoutError) else "unavailable"
+    except (ValueError, OSError, json.JSONDecodeError):
+        result["probe_error"] = "invalid-response"
     return result
 
 
@@ -183,6 +188,8 @@ def runtime_status(runtime_stack: RuntimeStack | None) -> dict[str, Any]:
         running = container_running and bool(endpoint["serving"])
         if running:
             status = "running"
+        elif container_running and endpoint.get("probe_error") == "timeout":
+            status = "probe-timeout"
         elif container_running:
             status = "unreachable"
         else:
@@ -202,6 +209,7 @@ def runtime_status(runtime_stack: RuntimeStack | None) -> dict[str, Any]:
                 "serving": endpoint["serving"],
                 "http_status": endpoint["http_status"],
                 "models": endpoint["models"],
+                "probe_error": endpoint.get("probe_error"),
                 "status": status,
                 "started_at": service.started_at,
             }

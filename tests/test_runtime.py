@@ -62,3 +62,24 @@ def test_reachable_served_model_is_reported_running(
     assert payload["services"][0]["running"] is True
     assert payload["services"][0]["status"] == "running"
     assert payload["services"][0]["models"] == ["served-model"]
+
+
+@mock.patch("agentmux.runtime.container_is_running", return_value=True)
+@mock.patch(
+    "agentmux.runtime._endpoint_probe",
+    return_value={
+        "reachable": False,
+        "serving": False,
+        "http_status": None,
+        "models": [],
+        "probe_error": "timeout",
+    },
+)
+def test_busy_endpoint_probe_timeout_is_distinct_from_unreachable(
+    _probe: mock.Mock, _container: mock.Mock
+) -> None:
+    payload = runtime_status(stack())
+
+    assert payload["active"] is False
+    assert payload["services"][0]["status"] == "probe-timeout"
+    assert payload["services"][0]["probe_error"] == "timeout"

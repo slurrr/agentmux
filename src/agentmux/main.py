@@ -216,7 +216,12 @@ def _print_status(as_json: bool) -> int:
             f"port={service['port']} age={format_age(float(service['started_at']))}"
         )
         print(f"    image: {service['image']}")
-        endpoint = "reachable" if service["endpoint_reachable"] else "unreachable"
+        if service["endpoint_reachable"]:
+            endpoint = "reachable"
+        elif service["probe_error"] == "timeout":
+            endpoint = "probe-timeout"
+        else:
+            endpoint = "unreachable"
         print(f"    endpoint: {endpoint} {service['health_url']}")
         if service["models"]:
             print(f"    models: {', '.join(service['models'])}")
