@@ -87,7 +87,7 @@ sampling:
 ## Notes / caveats
 
 ```text
-- [2026-07-11] Onboarded /home/poop/models/local/exl3/gemma4-a4b-4.20-cook/candidates/gemma4-a4b-4.20-5.00bpw-h8-hq (Gemma4ForConditionalGeneration).
+- [2026-07-11] Onboarded the 5.00bpw cook candidate (cook tree since removed) (Gemma4ForConditionalGeneration).
 - Native context length: 262144 tokens.
 - Detected host GPU VRAM: 23.99 GB (1 GPU(s)).
 - VRAM-aware selection: max_seq_len=262144, cache_mode=4,4, output_chunking=True.
