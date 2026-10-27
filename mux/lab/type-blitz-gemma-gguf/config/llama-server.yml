@@ -1,0 +1,45 @@
+server:
+  host: 0.0.0.0
+  port: 5000
+  ctx-size: 131072
+  n-gpu-layers: -1
+  threads: 8
+  parallel: 16
+  cont-batching: true
+  flash-attn: true
+  metrics: true
+  fit: false
+  kv-unified: true
+  batch-size: 8192
+  ubatch-size: 2048
+  cache-type-k: q4_0
+  cache-type-v: q4_0
+  cache-ram: 0
+  reasoning: 'off'
+  jinja: true
+  model: /models/active-gguf/type-blitz-gemma.gguf
+  alias: type-blitz-gemma
+sampling:
+  temperature: 1.0
+  top-p: 0.949999988079071
+  top-k: 64
+runtime:
+  image: localhost/llm-gguf:latest
+  container_name: llama-server
+metadata:
+  architecture: gemma4
+  source_gguf: /home/poop/models/hf/hub/models--HauhauCS--Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced/snapshots/96c11c22b1128c3c8c655b21557b409f307c557f/Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced-Q4_K_P.gguf
+  weights_gb: 15.755
+  use_case: type-blitz
+  concurrency: 16
+  per_request_ctx: 8192
+  thinking: false
+  output_schema: configs/schemas/type-blitz-passage.json
+  requires_breeze_stopped: true
+  sampling_provenance:
+    source: gguf_metadata
+    origin: /home/poop/models/hf/hub/models--HauhauCS--Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced/snapshots/96c11c22b1128c3c8c655b21557b409f307c557f/Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced-Q4_K_P.gguf
+    extracted_keys:
+    - general.sampling.temp
+    - general.sampling.top_p
+    - general.sampling.top_k
