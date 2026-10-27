@@ -10,7 +10,7 @@ launch recipe plus a human-readable manifest explaining what is actually being s
 A mux is a directory:
 
 ```text
-mux/lab/gemma-4-12b-it-exl3/
+mux/lab/gemma4-a4b-5bpw-exl3/
   mux.toml
   manifest.md
 ```
@@ -41,12 +41,12 @@ mux/lab/gemma-4-12b-it-exl3/
 
 ```toml
 [mux]
-name = "gemma-4-12b-it-exl3"
+name = "gemma4-a4b-5bpw-exl3"
 primary_service = "main"
 
 [services.main]
-image = "localhost/agentmux-gemma-4-12b-it-exl3:stable"
-container_name = "agentmux-gemma-4-12b-it-exl3-main"
+image = "localhost/llm-tabby:exllamav3-1.4.4-cu132-tabby-fcc1a107-cuda13.2.1"
+container_name = "agentmux-gemma4-a4b-5bpw-exl3-main"
 port = 8002
 container_port = 5000
 podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
@@ -57,7 +57,7 @@ AgentMux automatically appends:
 
 ```bash
 --publish 8002:5000
---volume ~/runs/agentmux/gemma-4-12b-it-exl3/main:/runs:rw
+--volume ~/runs/agentmux/gemma4-a4b-5bpw-exl3/main:/runs:rw
 ```
 
 AgentMux does **not** automatically mount models. If a promoted container needs extra mounts, they
@@ -95,9 +95,9 @@ that file; it is not a second implementation.
 
 ```bash
 agentmux list
-agentmux show gemma-4-12b-it-exl3
-agentmux render gemma-4-12b-it-exl3
-agentmux up gemma-4-12b-it-exl3
+agentmux show gemma4-a4b-5bpw-exl3
+agentmux render gemma4-a4b-5bpw-exl3
+agentmux up gemma4-a4b-5bpw-exl3
 agentmux status
 agentmux logs main -f
 agentmux down
