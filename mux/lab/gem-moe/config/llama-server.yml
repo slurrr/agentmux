@@ -31,6 +31,6 @@ metadata:
     source: gguf_metadata
     origin: /home/poop/models/hf/hub/models--HauhauCS--Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced/snapshots/96c11c22b1128c3c8c655b21557b409f307c557f/Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced-Q4_K_P.gguf
     extracted_keys:
-    - general.sampling.temp
-    - general.sampling.top_p
-    - general.sampling.top_k
+      - general.sampling.temp
+      - general.sampling.top_p
+      - general.sampling.top_k

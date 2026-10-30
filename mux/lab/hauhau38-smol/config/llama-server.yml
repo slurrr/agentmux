@@ -1,10 +1,10 @@
 server:
   host: 0.0.0.0
   port: 5000
-  ctx-size: 229376
+  ctx-size: 221184
   n-gpu-layers: -1
   threads: 8
-  parallel: 1
+  parallel: 2
   cont-batching: true
   flash-attn: true
   metrics: true

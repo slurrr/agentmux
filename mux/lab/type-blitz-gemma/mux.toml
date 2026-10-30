@@ -1,5 +1,5 @@
 [mux]
-name = "type-blitz-gemma-gguf"
+name = "type-blitz-gemma"
 primary_service = "main"
 notes = "Lab-editable AgentMux export for proven type-blitz-gemma GGUF llama.cpp serving preset from workspace-gguf."
 
@@ -8,7 +8,12 @@ image = "localhost/llm-gguf:latest"
 container_name = "agentmux-type-blitz-gemma-gguf-main"
 port = 8002
 container_port = 5000
-podman_args = ["--security-opt", "label=disable", "--device", "nvidia.com/gpu=all"]
+podman_args = [
+  "--security-opt",
+  "label=disable",
+  "--device",
+  "nvidia.com/gpu=all",
+]
 health_path = "/v1/models"
 command = ["/bin/bash", "/mux-config/launch-llama-server.sh"]
 
